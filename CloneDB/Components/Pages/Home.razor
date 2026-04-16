@@ -1,0 +1,521 @@
+@page "/"
+@inject CloneService CloneService
+
+<div class="min-h-screen bg-[#0B1220] text-gray-100 p-4 md:p-8 font-sans">
+    <div class="max-w-7xl mx-auto">
+
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div>
+                <h1 class="text-4xl font-black text-[#0E857D] tracking-tighter italic"><span class="text-white not-italic">DB-CLONER</span></h1>
+                <p class="text-sm text-gray-500 font-medium">Internal Database Replication Engine</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="bg-[#161D2B] px-4 py-2 rounded-full border border-gray-800 flex items-center gap-3">
+                    <div class="relative flex h-3 w-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full @(isBusy ? "bg-yellow-400" : state == AppState.Done ? "bg-green-400" : "bg-gray-600") opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 @(isBusy ? "bg-yellow-500" : state == AppState.Done ? "bg-green-500" : "bg-gray-600")"></span>
+                    </div>
+                    <span class="text-xs font-bold tracking-widest text-gray-300">SYSTEM: @StatusLabel</span>
+                </div>
+                @if (state is AppState.Cloning or AppState.Done)
+                {
+                    <div class="bg-[#161D2B] px-4 py-2 rounded-full border border-gray-800 flex items-center gap-2">
+                        <svg class="w-3.5 h-3.5 @(state == AppState.Cloning ? "text-yellow-400 animate-spin" : "text-green-400")" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0" />
+                        </svg>
+                        <span class="text-xs font-mono font-bold @(state == AppState.Cloning ? "text-yellow-300" : "text-green-400")">@ElapsedDisplay</span>
+                    </div>
+                }
+                @if (state != AppState.Idle && state != AppState.Connecting)
+                {
+                    <button @onclick="Reset" class="bg-[#161D2B] border border-gray-700 px-4 py-2 rounded-full text-xs font-bold text-gray-400 hover:border-red-500 hover:text-red-400 transition-all">
+                        RESET
+                    </button>
+                }
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+            <!-- LEFT: Config Panel -->
+            <div class="lg:col-span-5 xl:col-span-4 space-y-5">
+
+                <!-- Source Server -->
+                <div class="bg-[#111927]/80 backdrop-blur-xl p-6 rounded-3xl border border-white/5 shadow-2xl">
+                    <h2 class="text-xs font-bold text-[#0E857D] mb-5 tracking-widest uppercase">Source Server (Remote)</h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-[10px] text-gray-500 ml-1 mb-1 block">HOST / ADDRESS</label>
+                            <input @bind="srv.Host" disabled="@isBusy"
+                                   class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm placeholder:text-gray-700 disabled:opacity-40"
+                                   placeholder="e.g. 103.45.xx.xx" />
+                        </div>
+                        <div>
+                            <label class="text-[10px] text-gray-500 ml-1 mb-1 block">DATABASE</label>
+                            <input @bind="srv.DB" disabled="@isBusy"
+                                   class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40"
+                                   placeholder="Database Name" />
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-[10px] text-gray-500 ml-1 mb-1 block">USER</label>
+                                <input @bind="srv.User" disabled="@isBusy"
+                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
+                            </div>
+                            <div>
+                                <label class="text-[10px] text-gray-500 ml-1 mb-1 block">PASSWORD</label>
+                                <input @bind="srv.Pass" type="password" disabled="@isBusy"
+                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Local Server -->
+                <div class="bg-[#111927]/80 backdrop-blur-xl p-6 rounded-3xl border border-white/5 shadow-2xl">
+                    <h2 class="text-xs font-bold text-[#0E857D] mb-5 tracking-widest uppercase">Target Server (Local)</h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-[10px] text-gray-500 ml-1 mb-1 block">HOST / ADDRESS</label>
+                            <input @bind="loc.Host" disabled="@isBusy"
+                                   class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40"
+                                   placeholder="e.g. . (localhost)" />
+                        </div>
+                        <div>
+                            <label class="text-[10px] text-gray-500 ml-1 mb-1 block">DATABASE</label>
+                            <input @bind="loc.DB" disabled="@isBusy"
+                                   class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40"
+                                   placeholder="Target Database" />
+                        </div>
+                        <div class="flex items-center gap-1 p-1 bg-[#0B1220] rounded-xl border border-gray-800">
+                            <button @onclick="() => useWinAuth = true" disabled="@isBusy"
+                                    class="flex-1 py-2 rounded-lg text-[10px] font-bold transition-all @(useWinAuth ? "bg-[#0E857D] text-white" : "text-gray-500 hover:text-gray-300")">
+                                WINDOWS AUTH
+                            </button>
+                            <button @onclick="() => useWinAuth = false" disabled="@isBusy"
+                                    class="flex-1 py-2 rounded-lg text-[10px] font-bold transition-all @(!useWinAuth ? "bg-[#0E857D] text-white" : "text-gray-500 hover:text-gray-300")">
+                                SQL AUTH
+                            </button>
+                        </div>
+                        @if (!useWinAuth)
+                        {
+                            <div class="grid grid-cols-2 gap-3">
+                                <input @bind="loc.User" disabled="@isBusy"
+                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] outline-none text-sm disabled:opacity-40"
+                                       placeholder="User" />
+                                <input @bind="loc.Pass" type="password" disabled="@isBusy"
+                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] outline-none text-sm disabled:opacity-40"
+                                       placeholder="Pass" />
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Parallel config (Connected only) -->
+                @if (state == AppState.Connected)
+                {
+                    <div class="bg-[#111927]/80 backdrop-blur-xl p-5 rounded-3xl border border-white/5 shadow-2xl">
+                        <div class="flex justify-between items-center mb-3">
+                            <label class="text-xs font-bold text-gray-400 uppercase tracking-widest">Parallel Tasks</label>
+                            <span class="text-[#0E857D] font-black text-xl">@maxParallel</span>
+                        </div>
+                        <input type="range" min="1" max="10" step="1" @bind="maxParallel"
+                               class="w-full cursor-pointer accent-teal-600" />
+                        <div class="flex justify-between text-[9px] text-gray-600 mt-1 px-0.5">
+                            <span>1 (safe)</span><span>5</span><span>10 (fast)</span>
+                        </div>
+                    </div>
+                }
+
+                <!-- Error message -->
+                @if (!string.IsNullOrEmpty(connectError))
+                {
+                    <div class="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl text-xs text-red-400 font-mono break-all">
+                        ? @connectError
+                    </div>
+                }
+
+                <!-- Action buttons -->
+                @if (state is AppState.Idle or AppState.Connecting)
+                {
+                    <button @onclick="Connect" disabled="@isBusy"
+                            class="w-full bg-gradient-to-br from-[#0E857D] to-[#0A6E68] hover:shadow-[0_0_30px_rgba(14,133,125,0.4)] text-white font-black py-4 rounded-3xl transition-all duration-300 disabled:opacity-50 active:scale-95 uppercase tracking-wider text-sm">
+                        @if (state == AppState.Connecting)
+                        {
+                            <span class="flex items-center justify-center gap-2">
+                                <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                Connecting...
+                            </span>
+                        }
+                        else
+                        {
+                            <span>Connect to Source</span>
+                        }
+                    </button>
+                }
+                else if (state == AppState.Connected)
+                {
+                    <button @onclick="StartExecution" disabled="@(selectedTables.Count == 0)"
+                            class="w-full bg-gradient-to-br from-[#0E857D] to-[#0A6E68] hover:shadow-[0_0_30px_rgba(14,133,125,0.4)] text-white font-black py-4 rounded-3xl transition-all duration-300 disabled:opacity-30 disabled:grayscale active:scale-95 uppercase tracking-wider text-sm">
+                        ? Start Clone (@selectedTables.Count / @allTables.Count tables)
+                    </button>
+                }
+            </div>
+
+            <!-- RIGHT: Tables / Progress Panel -->
+            <div class="lg:col-span-7 xl:col-span-8">
+                <div class="bg-[#111927]/80 backdrop-blur-xl rounded-3xl border border-white/5 shadow-2xl flex flex-col overflow-hidden min-h-[600px]">
+
+                    <!-- Panel Header -->
+                    <div class="p-5 border-b border-white/5 flex justify-between items-center bg-[#161D2B]/50 shrink-0">
+                        @if (state is AppState.Idle or AppState.Connecting)
+                        {
+                            <h3 class="font-bold text-gray-500 text-sm">Awaiting Connection...</h3>
+                        }
+                        else if (state == AppState.Connected)
+                        {
+                            <h3 class="font-bold text-gray-300 text-sm">Select Tables to Clone</h3>
+                            <span class="text-[10px] font-mono text-[#0E857D] font-bold">@selectedTables.Count / @allTables.Count selected</span>
+                        }
+                        else
+                        {
+                            <h3 class="font-bold text-gray-300 text-sm">Clone Pipeline</h3>
+                            <div class="flex items-center gap-3 text-[10px] font-mono font-bold">
+                                <span class="text-green-400">✓ @successCount ok</span>
+                                @if (errorCount > 0) { <span class="text-red-400">✗ @errorCount err</span> }
+                                <span class="text-gray-500">/ @progressList.Count</span>
+                                @{ var totalCopied = progressList.Values.Sum(p => p.RowsCopied); }
+                                @if (totalCopied > 0)
+                                {
+                                    <span class="text-[#0E857D]">@totalCopied.ToString("N0") rows</span>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Table search toolbar (Connected only) -->
+                    @if (state == AppState.Connected)
+                    {
+                        <div class="px-5 pt-4 pb-0 flex items-center gap-3 shrink-0">
+                            <div class="flex-1 relative">
+                                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+                                </svg>
+                                <input @bind="tableSearch" @bind:event="oninput"
+                                       placeholder="Search tables..."
+                                       class="w-full bg-[#0B1220] border border-gray-700/50 pl-9 pr-3 py-2.5 rounded-xl focus:border-[#0E857D] outline-none text-sm placeholder:text-gray-700" />
+                            </div>
+                            <button @onclick="ToggleAll"
+                                    class="shrink-0 px-3 py-2.5 rounded-xl text-[10px] font-black border transition-all @(allSelected ? "border-[#0E857D] text-[#0E857D] bg-[#0E857D]/10" : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300")">
+                                @(allSelected ? "DESELECT ALL" : "SELECT ALL")
+                            </button>
+                        </div>
+                    }
+
+                    <!-- Scrollable content -->
+                    <div class="flex-1 overflow-y-auto p-5 custom-scroll">
+
+                        @if (state is AppState.Idle or AppState.Connecting)
+                        {
+                            <div class="h-full flex flex-col items-center justify-center opacity-20 py-20">
+                                <svg class="w-20 h-20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M4 7v10c0 2.21 3.58 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.58 4 8 4s8-1.79 8-4M4 7c0-2.21 3.58-4 8-4s8 1.79 8 4m0 5c0 2.21-3.58 4-8 4s-8-1.79-8-4" />
+                                </svg>
+                                <p class="text-sm font-medium italic">Connect to source to load tables...</p>
+                            </div>
+                        }
+                        else if (state == AppState.Connected)
+                        {
+                            <div class="space-y-1.5 pt-3">
+                                @foreach (var tbl in filteredTables)
+                                {
+                                    bool sel = selectedTables.Contains(tbl);
+                                    <div @key="tbl" @onclick="() => ToggleTable(tbl)"
+                                         class="flex items-center gap-3 p-3 rounded-xl cursor-pointer select-none transition-all @(sel ? "bg-[#0E857D]/10 border border-[#0E857D]/30" : "bg-[#0B1220] border border-transparent hover:border-gray-700/50")">
+                                        <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(sel ? "border-[#0E857D] bg-[#0E857D]" : "border-gray-600")">
+                                            @if (sel)
+                                            {
+                                                <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                                                </svg>
+                                            }
+                                        </div>
+                                        <span class="text-sm font-mono text-gray-300">@tbl</span>
+                                    </div>
+                                }
+                                @if (!filteredTables.Any())
+                                {
+                                    <div class="text-center py-16 text-gray-600 text-sm">No tables match "@tableSearch"</div>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <!-- Progress bars -->
+                            <div class="space-y-3">
+                                @foreach (var item in progressList.Values.OrderBy(p => p.TableName))
+                                {
+                                    <div @key="item.TableName" class="bg-[#0B1220] border @GetBorderClass(item.Status) p-4 rounded-2xl transition-all duration-300">
+                                        <div class="flex justify-between items-center mb-2.5">
+                                            <div class="flex items-center gap-2.5 min-w-0">
+                                                <div class="w-2 h-2 rounded-full shrink-0 @GetDotClass(item.Status)"></div>
+                                                <span class="text-xs font-mono text-gray-300 truncate max-w-[180px]">@item.TableName</span>
+                                                @if (item.ItemType != "TABLE")
+                                                {
+                                                    <span class="shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded @GetTypeBadgeClass(item.ItemType)">@item.ItemType</span>
+                                                }
+                                            </div>
+                                            <div class="flex items-center gap-2 shrink-0">
+                                                <span class="text-[9px] text-gray-600 uppercase tracking-wider">@item.Status</span>
+                                                <span class="text-[11px] font-black @(item.Status == "Success" ? "text-green-400" : "text-[#0E857D]")">@item.Percentage.ToString("F0")%</span>
+                                            </div>
+                                        </div>
+                                        <div class="w-full bg-[#161D2B] h-1.5 rounded-full overflow-hidden">
+                                            <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r @GetBarClass(item.Status)"
+                                                 style="width: @(item.Percentage)%"></div>
+                                        </div>
+                                        @if (item.ItemType == "TABLE")
+                                        {
+                                            <div class="mt-1.5 flex justify-between text-[9px] font-mono text-[aqua]">
+                                                <span>@item.RowsCopied.ToString("N0") / @item.TotalRows.ToString("N0") rows</span>
+                                                @if (item.Status == "Success")
+                                                {
+                                                    <span class="text-green-500/70">done</span>
+                                                }
+                                            </div>
+                                        }
+                                        @if (!string.IsNullOrEmpty(item.Message))
+                                        {
+                                            <div class="mt-2 text-[9px] font-mono break-all p-2 rounded-lg border @(item.Status == "Skipped" ? "text-yellow-400/80 bg-yellow-500/5 border-yellow-500/10" : "text-red-400/80 bg-red-500/5 border-red-500/10")">
+                                                @(item.Status == "Skipped" ? "SKIP: " : "ERR: ")@item.Message
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Done footer -->
+                    @if (state == AppState.Done)
+                    {
+                        <div class="p-4 border-t border-white/5 bg-[#161D2B]/50 flex items-center justify-between shrink-0">
+                            <div class="flex items-center gap-4">
+                                <span class="text-green-400 font-bold text-sm">@successCount success</span>
+                                @if (skippedCount > 0) { <span class="text-yellow-400 font-bold text-sm">@skippedCount skipped</span> }
+                                @if (errorCount > 0) { <span class="text-red-400 font-bold text-sm">@errorCount failed</span> }
+                                @{ var totalR = progressList.Values.Sum(p => p.RowsCopied); }
+                                @if (totalR > 0) { <span class="text-[#0E857D] font-bold text-sm">@totalR.ToString("N0") rows</span> }
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0" />
+                                </svg>
+                                <span class="text-xs font-mono font-bold text-green-400">@ElapsedDisplay</span>
+                            </div>
+                        </div>
+                    }
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<style>
+    .custom-scroll::-webkit-scrollbar { width: 4px; }
+    .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #1F2937; border-radius: 10px; }
+    .custom-scroll::-webkit-scrollbar-thumb:hover { background: #0E857D; }
+</style>
+@code {
+@* Scaffold-DbContext "Server=10.235.55.110;Database=EOffice_Dev;User Id=HRModule;Password=112233@HRM;Trusted_Connection=True;TrustServerCertificate=True;Integrated Security=false;" Microsoft.EntityFrameworkCore.SqlServer -OutputDir DBContext/EOffice -Force -NoOnConfiguring -Context EOfficeContext *@
+    enum AppState { Idle, Connecting, Connected, Cloning, Done }
+
+    class Config { public string Host = ""; public string DB = ""; public string User = ""; public string Pass = ""; }
+
+    Config srv = new();
+    Config loc = new() { Host = "." };
+    bool useWinAuth = true;
+    AppState state = AppState.Idle;
+    string connectError = "";
+    int maxParallel = 4;
+
+    List<string> allTables = new();
+    HashSet<string> selectedTables = new();
+    string tableSearch = "";
+    Dictionary<string, TableCloneProgress> progressList = new();
+
+    bool isBusy => state is AppState.Connecting or AppState.Cloning;
+    int successCount => progressList.Values.Count(p => p.Status == "Success");
+    int errorCount   => progressList.Values.Count(p => p.Status == "Error");
+    int skippedCount => progressList.Values.Count(p => p.Status == "Skipped");
+
+    System.Diagnostics.Stopwatch _stopwatch = new();
+    string ElapsedDisplay
+    {
+        get
+        {
+            var e = _stopwatch.Elapsed;
+            return e.TotalHours >= 1
+                ? $"{(int)e.TotalHours:D2}:{e.Minutes:D2}:{e.Seconds:D2}"
+                : $"{e.Minutes:D2}:{e.Seconds:D2}";
+        }
+    }
+
+    string StatusLabel => state switch
+    {
+        AppState.Connecting => "CONNECTING",
+        AppState.Connected  => "READY",
+        AppState.Cloning    => "CLONING",
+        AppState.Done       => "DONE",
+        _                   => "IDLE"
+    };
+
+    IEnumerable<string> filteredTables => string.IsNullOrWhiteSpace(tableSearch)
+        ? allTables
+        : allTables.Where(t => t.Contains(tableSearch, StringComparison.OrdinalIgnoreCase));
+
+    bool allSelected => filteredTables.Any() && filteredTables.All(t => selectedTables.Contains(t));
+
+    void ToggleAll()
+    {
+        if (allSelected)
+            foreach (var t in filteredTables.ToList()) selectedTables.Remove(t);
+        else
+            foreach (var t in filteredTables.ToList()) selectedTables.Add(t);
+    }
+
+    void ToggleTable(string tbl)
+    {
+        if (selectedTables.Contains(tbl)) selectedTables.Remove(tbl);
+        else selectedTables.Add(tbl);
+    }
+
+    async Task Connect()
+    {
+        if (string.IsNullOrWhiteSpace(srv.Host) || string.IsNullOrWhiteSpace(srv.DB) ||
+            string.IsNullOrWhiteSpace(srv.User) || string.IsNullOrWhiteSpace(srv.Pass))
+        {
+            connectError = "Vui l�ng di?n d?y d? th�ng tin Source Server.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(loc.Host) || string.IsNullOrWhiteSpace(loc.DB))
+        {
+            connectError = "Vui l�ng di?n d?y d? th�ng tin Local Server (Host + Database).";
+            return;
+        }
+        if (!useWinAuth && (string.IsNullOrWhiteSpace(loc.User) || string.IsNullOrWhiteSpace(loc.Pass)))
+        {
+            connectError = "Nh?p User/Pass cho Local SQL Auth.";
+            return;
+        }
+
+        connectError = "";
+        state = AppState.Connecting;
+        StateHasChanged();
+
+        try
+        {
+            allTables = await CloneService.GetTablesAsync(BuildServerConnStr);
+            selectedTables = new HashSet<string>(allTables);
+            state = AppState.Connected;
+        }
+        catch (Exception ex)
+        {
+            connectError = ex.Message;
+            state = AppState.Idle;
+        }
+    }
+
+    async Task StartExecution()
+    {
+        if (selectedTables.Count == 0) return;
+
+        state = AppState.Cloning;
+        progressList = selectedTables.ToDictionary(
+            t => t,
+            t => new TableCloneProgress { TableName = t, Status = "Pending", ItemType = "TABLE" });
+
+        _stopwatch.Restart();
+
+        // Vòng lặp cập nhật đồng hồ mỗi giây
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        var timerTask = Task.Run(async () =>
+        {
+            while (await timer.WaitForNextTickAsync() && state == AppState.Cloning)
+                await InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            await CloneService.StartClone(BuildServerConnStr, BuildLocalConnStr, selectedTables.ToList(), maxParallel, p => { 
+                                                                                                                              progressList[p.TableName] = p;
+                                                                                                                              InvokeAsync(StateHasChanged);
+                                                                                                                            });
+        }
+        catch (Exception ex)
+        {
+            connectError = ex.Message;
+        }
+
+        _stopwatch.Stop();
+        state = AppState.Done;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    void Reset()
+    {
+        state = AppState.Idle;
+        progressList.Clear();
+        allTables.Clear();
+        selectedTables.Clear();
+        connectError = "";
+        tableSearch = "";
+        _stopwatch.Reset();
+    }
+
+    string BuildServerConnStr => $"Server={srv.Host};Database={srv.DB};User ID={srv.User};Password={srv.Pass};TrustServerCertificate=True;";
+    string BuildLocalConnStr => useWinAuth ? $"Server={loc.Host};Database={loc.DB};Integrated Security=True;TrustServerCertificate=True;"
+                                             : $"Server={loc.Host};Database={loc.DB};User ID={loc.User};Password={loc.Pass};TrustServerCertificate=True;";
+
+    static string GetBorderClass(string status) => status switch
+    {
+        "Cloning..."  => "border-[#0E857D]/50",
+        "Success"     => "border-green-500/20",
+        "Skipped"     => "border-yellow-500/20",
+        "Error"       => "border-red-500/20",
+        _             => "border-gray-800/50"
+    };
+
+    static string GetDotClass(string status) => status switch
+    {
+        "Cloning..."  => "bg-[#0E857D] animate-pulse shadow-[0_0_6px_rgba(14,133,125,0.7)]",
+        "Waiting..."  => "bg-yellow-500 animate-pulse",
+        "Success"     => "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]",
+        "Skipped"     => "bg-yellow-400",
+        "Error"       => "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]",
+        _             => "bg-gray-600"
+    };
+
+    static string GetBarClass(string status) => status switch
+    {
+        "Success" => "from-green-500 to-green-400",
+        "Skipped" => "from-yellow-500 to-yellow-400",
+        "Error"   => "from-red-500 to-red-400",
+        _         => "from-[#0E857D] to-[#2DD4BF]"
+    };
+
+    static string GetTypeBadgeClass(string type) => type switch
+    {
+        "VIEW"      => "bg-blue-500/20 text-blue-400",
+        "PROCEDURE" => "bg-purple-500/20 text-purple-400",
+        "FUNCTION"  => "bg-amber-500/20 text-amber-400",
+        _           => "bg-gray-500/20 text-gray-400"
+    };
+}
