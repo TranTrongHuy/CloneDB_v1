@@ -7,7 +7,9 @@
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
             <div>
-                <h1 class="text-4xl font-black text-[#0E857D] tracking-tighter italic"><span class="text-white not-italic">DB-CLONER</span></h1>
+                <h1 class="text-4xl font-black text-[#0E857D] tracking-tighter italic">
+                    <span class="text-white not-italic">DB-CLONER</span>
+                </h1>
                 <p class="text-sm text-gray-500 font-medium">Internal Database Replication Engine</p>
             </div>
             <div class="flex items-center gap-3">
@@ -126,13 +128,36 @@
                             <span>1 (safe)</span><span>5</span><span>10 (fast)</span>
                         </div>
                     </div>
+
+                    <!-- Summary badge -->
+                    <div class="bg-[#111927]/80 backdrop-blur-xl p-4 rounded-3xl border border-white/5 shadow-2xl">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-widest mb-3 font-bold">Selection Summary</p>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-[#0B1220] rounded-xl p-3 text-center">
+                                <p class="text-[#0E857D] font-black text-lg">@tableModes.Count</p>
+                                <p class="text-[9px] text-gray-500 uppercase tracking-wider">Tables</p>
+                            </div>
+                            <div class="bg-[#0B1220] rounded-xl p-3 text-center">
+                                <p class="text-blue-400 font-black text-lg">@selectedObjects.Count(o => o.ObjectType == "VIEW")</p>
+                                <p class="text-[9px] text-gray-500 uppercase tracking-wider">Views</p>
+                            </div>
+                            <div class="bg-[#0B1220] rounded-xl p-3 text-center">
+                                <p class="text-purple-400 font-black text-lg">@selectedObjects.Count(o => o.ObjectType == "PROCEDURE")</p>
+                                <p class="text-[9px] text-gray-500 uppercase tracking-wider">Procedures</p>
+                            </div>
+                            <div class="bg-[#0B1220] rounded-xl p-3 text-center">
+                                <p class="text-amber-400 font-black text-lg">@selectedObjects.Count(o => o.ObjectType == "FUNCTION")</p>
+                                <p class="text-[9px] text-gray-500 uppercase tracking-wider">Functions</p>
+                            </div>
+                        </div>
+                    </div>
                 }
 
                 <!-- Error message -->
                 @if (!string.IsNullOrEmpty(connectError))
                 {
                     <div class="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl text-xs text-red-400 font-mono break-all">
-                        ? @connectError
+                        ⚠ @connectError
                     </div>
                 }
 
@@ -148,71 +173,116 @@
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                                 </svg>
-                                Connecting...
+                                Checking Source + Target...
                             </span>
                         }
                         else
                         {
-                            <span>Connect to Source</span>
+
+                            <span>Connect (Source + Target)</span>
                         }
                     </button>
                 }
                 else if (state == AppState.Connected)
                 {
-                    <button @onclick="StartExecution" disabled="@(selectedTables.Count == 0)"
+                    int totalSelected = tableModes.Count + selectedObjects.Count;
+                    <button @onclick="StartExecution" disabled="@(totalSelected == 0)"
                             class="w-full bg-gradient-to-br from-[#0E857D] to-[#0A6E68] hover:shadow-[0_0_30px_rgba(14,133,125,0.4)] text-white font-black py-4 rounded-3xl transition-all duration-300 disabled:opacity-30 disabled:grayscale active:scale-95 uppercase tracking-wider text-sm">
-                        ? Start Clone (@selectedTables.Count / @allTables.Count tables)
+                        ▶ Start Clone (@totalSelected items)
                     </button>
                 }
             </div>
 
-            <!-- RIGHT: Tables / Progress Panel -->
+            <!-- RIGHT: Selection / Progress Panel -->
             <div class="lg:col-span-7 xl:col-span-8">
                 <div class="bg-[#111927]/80 backdrop-blur-xl rounded-3xl border border-white/5 shadow-2xl flex flex-col overflow-hidden min-h-[600px]">
 
-                    <!-- Panel Header -->
-                    <div class="p-5 border-b border-white/5 flex justify-between items-center bg-[#161D2B]/50 shrink-0">
+                    <!-- Panel Header / Tabs -->
+                    <div class="p-5 border-b border-white/5 bg-[#161D2B]/50 shrink-0">
                         @if (state is AppState.Idle or AppState.Connecting)
                         {
                             <h3 class="font-bold text-gray-500 text-sm">Awaiting Connection...</h3>
                         }
                         else if (state == AppState.Connected)
                         {
-                            <h3 class="font-bold text-gray-300 text-sm">Select Tables to Clone</h3>
-                            <span class="text-[10px] font-mono text-[#0E857D] font-bold">@selectedTables.Count / @allTables.Count selected</span>
+                            <!-- Object Type Tabs -->
+                            <div class="flex items-center gap-1 flex-wrap">
+                                @foreach (var tab in new[] { "TABLE", "VIEW", "PROCEDURE", "FUNCTION" })
+                                {
+                                    int count = GetTabCount(tab);
+                                    bool active = activeTab == tab;
+                                    <button @onclick="() => activeTab = tab"
+                                            class="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all @(active? GetTabActiveClass(tab) : "text-gray-500 hover:text-gray-300 hover:bg-white/5")">
+                                        <span>@GetTabIcon(tab)</span>
+                                        <span>@tab</span>
+                                        <span class="@(active ? "bg-white/20" : "bg-white/5") px-1.5 py-0.5 rounded-md text-[9px]">@count</span>
+                                    </button>
+                                }
+                            </div>
                         }
                         else
                         {
-                            <h3 class="font-bold text-gray-300 text-sm">Clone Pipeline</h3>
-                            <div class="flex items-center gap-3 text-[10px] font-mono font-bold">
-                                <span class="text-green-400">✓ @successCount ok</span>
-                                @if (errorCount > 0) { <span class="text-red-400">✗ @errorCount err</span> }
-                                <span class="text-gray-500">/ @progressList.Count</span>
-                                @{ var totalCopied = progressList.Values.Sum(p => p.RowsCopied); }
-                                @if (totalCopied > 0)
-                                {
-                                    <span class="text-[#0E857D]">@totalCopied.ToString("N0") rows</span>
-                                }
+                            <div class="flex justify-between items-center">
+                                <h3 class="font-bold text-gray-300 text-sm">Clone Pipeline</h3>
+                                <div class="flex items-center gap-3 text-[10px] font-mono font-bold">
+                                    <span class="text-green-400">✓ @successCount ok</span>
+                                    @if (errorCount > 0)
+                                    {
+                                        <span class="text-red-400">✗ @errorCount err</span>
+                                    }
+                                    @if (skippedCount > 0)
+                                    {
+                                        <span class="text-yellow-400">⊘ @skippedCount skip</span>
+                                    }
+                                    <span class="text-gray-500">/ @progressList.Count</span>
+                                    @{
+                                        var totalCopied = progressList.Values.Sum(p => p.RowsCopied);
+                                    }
+                                    @if (totalCopied > 0)
+                                    {
+                                        <span class="text-[#0E857D]">@totalCopied.ToString("N0") rows</span>
+                                    }
+                                </div>
                             </div>
                         }
                     </div>
 
-                    <!-- Table search toolbar (Connected only) -->
+                    <!-- Search + SelectAll toolbar (Connected only) -->
                     @if (state == AppState.Connected)
                     {
-                        <div class="px-5 pt-4 pb-0 flex items-center gap-3 shrink-0">
-                            <div class="flex-1 relative">
-                                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
-                                </svg>
-                                <input @bind="tableSearch" @bind:event="oninput"
-                                       placeholder="Search tables..."
-                                       class="w-full bg-[#0B1220] border border-gray-700/50 pl-9 pr-3 py-2.5 rounded-xl focus:border-[#0E857D] outline-none text-sm placeholder:text-gray-700" />
+                        <div class="px-5 pt-4 pb-0 flex flex-col gap-2 shrink-0">
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1 relative">
+                                    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+                                    </svg>
+                                    <input @bind="itemSearch" @bind:event="oninput"
+                                           placeholder="@($"Search {activeTab.ToLower()}s...")"
+                                           class="w-full bg-[#0B1220] border border-gray-700/50 pl-9 pr-3 py-2.5 rounded-xl focus:border-[#0E857D] outline-none text-sm placeholder:text-gray-700" />
+                                </div>
+                                <button @onclick="ToggleAll"
+                                        class="shrink-0 px-3 py-2.5 rounded-xl text-[10px] font-black border transition-all @(IsAllSelected ? "border-[#0E857D] text-[#0E857D] bg-[#0E857D]/10" : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300")">
+                                    @(IsAllSelected ? "DESELECT ALL" : "SELECT ALL")
+                                </button>
                             </div>
-                            <button @onclick="ToggleAll"
-                                    class="shrink-0 px-3 py-2.5 rounded-xl text-[10px] font-black border transition-all @(allSelected ? "border-[#0E857D] text-[#0E857D] bg-[#0E857D]/10" : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300")">
-                                @(allSelected ? "DESELECT ALL" : "SELECT ALL")
-                            </button>
+                            @if (activeTab == "TABLE")
+                            {
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[9px] text-gray-600 uppercase tracking-widest font-bold shrink-0">All Tables:</span>
+                                    <div class="flex items-center gap-1 bg-[#0B1220] rounded-lg p-0.5 border border-gray-700/50">
+                                        @foreach (var gm in new[] { TableCloneMode.SchemaOnly, TableCloneMode.DataOnly, TableCloneMode.SchemaAndData })
+                                        {
+                                            bool isActive = allTables.Count > 0 && tableModes.Count == allTables.Count
+                                                            && tableModes.Values.All(v => v == gm);
+                                            <button @onclick="() => SetAllTablesMode(gm)"
+                                                    title="@GetModeLabel(gm)"
+                                                    class="px-3 py-1 rounded text-[9px] font-black transition-all @(isActive ? GetModeActiveClass(gm) : "text-gray-500 hover:text-gray-300")">
+                                                @GetModeShortLabel(gm)
+                                            </button>
+                                        }
+                                    </div>
+                                </div>
+                            }
                         </div>
                     }
 
@@ -225,41 +295,120 @@
                                 <svg class="w-20 h-20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M4 7v10c0 2.21 3.58 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.58 4 8 4s8-1.79 8-4M4 7c0-2.21 3.58-4 8-4s8 1.79 8 4m0 5c0 2.21-3.58 4-8 4s-8-1.79-8-4" />
                                 </svg>
-                                <p class="text-sm font-medium italic">Connect to source to load tables...</p>
+                                <p class="text-sm font-medium italic">Connect to source to load objects...</p>
                             </div>
                         }
                         else if (state == AppState.Connected)
                         {
-                            <div class="space-y-1.5 pt-3">
-                                @foreach (var tbl in filteredTables)
-                                {
-                                    bool sel = selectedTables.Contains(tbl);
-                                    <div @key="tbl" @onclick="() => ToggleTable(tbl)"
-                                         class="flex items-center gap-3 p-3 rounded-xl cursor-pointer select-none transition-all @(sel ? "bg-[#0E857D]/10 border border-[#0E857D]/30" : "bg-[#0B1220] border border-transparent hover:border-gray-700/50")">
-                                        <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(sel ? "border-[#0E857D] bg-[#0E857D]" : "border-gray-600")">
+                            <!-- TABLE tab -->
+                            @if (activeTab == "TABLE")
+                            {
+                                <div class="space-y-1.5 pt-3">
+                                    @foreach (var tbl in FilteredTables)
+                                    {
+                                        bool sel = tableModes.ContainsKey(tbl);
+                                        TableCloneMode mode = sel ? tableModes[tbl] : TableCloneMode.SchemaAndData;
+
+                                        <div @key="tbl" class="flex items-center gap-3 p-3 rounded-xl transition-all border @(sel ? "bg-[#0E857D]/10 border-[#0E857D]/30" : "bg-[#0B1220] border-transparent hover:border-gray-700/50")">
+
+                                            <!-- Checkbox -->
+                                            <div @onclick="() => ToggleTable(tbl)"
+                                                 class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 cursor-pointer transition-colors @(sel ? "border-[#0E857D] bg-[#0E857D]" : "border-gray-600")">
+                                                @if (sel)
+                                                {
+                                                    <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                }
+                                            </div>
+
+                                            <!-- Name -->
+                                            <span @onclick="() => ToggleTable(tbl)" class="flex-1 text-sm font-mono text-gray-300 cursor-pointer truncate">@tbl</span>
+
+                                            <!-- Row count badge -->
+                                            @{
+                                                long rc = tableRowCounts.TryGetValue(tbl, out var v) ? v : -1;
+                                            }
+                                            <span class="shrink-0 text-[9px] font-mono @(sel ? "text-[#0E857D]/80" : "text-gray-600") min-w-[36px] text-right">
+                                                @(rc < 0 ? "…" : FormatRowCount(rc))
+                                            </span>
+
+                                            <!-- Clone mode selector (only when selected) -->
                                             @if (sel)
                                             {
-                                                <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
-                                                </svg>
+                                                <div class="flex items-center gap-1 shrink-0 bg-[#0B1220] rounded-lg p-0.5 border border-gray-700/50">
+                                                    @foreach (var m in new[] { TableCloneMode.SchemaOnly, TableCloneMode.DataOnly, TableCloneMode.SchemaAndData })
+                                                    {
+                                                        bool active = mode == m;
+                                                        <button @onclick="() => SetTableMode(tbl, m)"
+                                                                title="@GetModeLabel(m)"
+                                                                class="px-2 py-1 rounded text-[8px] font-black transition-all @(active? GetModeActiveClass(m) : "text-gray-600 hover:text-gray-400")">
+                                                            @GetModeShortLabel(m)
+                                                        </button>
+                                                    }
+                                                </div>
                                             }
                                         </div>
-                                        <span class="text-sm font-mono text-gray-300">@tbl</span>
-                                    </div>
-                                }
-                                @if (!filteredTables.Any())
-                                {
-                                    <div class="text-center py-16 text-gray-600 text-sm">No tables match "@tableSearch"</div>
-                                }
-                            </div>
+                                    }
+                                    @if (!FilteredTables.Any())
+                                    {
+                                        <div class="text-center py-16 text-gray-600 text-sm">No tables match "@itemSearch"</div>
+                                    }
+                                </div>
+                            }
+
+                            <!-- VIEW / PROCEDURE / FUNCTION tabs -->
+                            @if (activeTab is "VIEW" or "PROCEDURE" or "FUNCTION")
+                            {
+                                var filtered = FilteredObjects;
+                                <div class="space-y-1.5 pt-3">
+                                    @foreach (var obj in filtered)
+                                    {
+                                        bool sel = selectedObjects.Any(o => o.Name == obj.Name && o.ObjectType == obj.ObjectType);
+                                        <div @key="@($"{obj.ObjectType}_{obj.Name}")" @onclick="() => ToggleObject(obj)"
+                                             class="flex items-center gap-3 p-3 rounded-xl cursor-pointer select-none transition-all border @(sel? GetObjectSelectedClass(obj.ObjectType) : "bg-[#0B1220] border-transparent hover:border-gray-700/50")">
+
+                                            <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(sel? GetObjectCheckboxClass(obj.ObjectType) : "border-gray-600")">
+                                                @if (sel)
+                                                {
+                                                    <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                }
+                                            </div>
+
+                                            <span class="flex-1 text-sm font-mono text-gray-300 truncate">@obj.Name</span>
+
+                                            <span class="shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded @GetTypeBadgeClass(obj.ObjectType)">@obj.ObjectType</span>
+                                        </div>
+                                    }
+                                    @if (!filtered.Any())
+                                    {
+                                        <div class="text-center py-16 text-gray-600 text-sm">
+                                            @if (string.IsNullOrWhiteSpace(itemSearch))
+                                            {
+                                                <span>No @activeTab.ToLower()s found in source database</span>
+                                            }
+                                            else
+                                            {
+
+                                                <span>No @activeTab.ToLower()s match "@itemSearch"</span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
                         }
                         else
                         {
-                            <!-- Progress bars -->
+                            <!-- Progress view -->
                             <div class="space-y-3">
-                                @foreach (var item in progressList.Values.OrderBy(p => p.TableName))
+                                @foreach (var kv in progressList.OrderBy(x => x.Value.ItemType).ThenBy(x => x.Value.TableName))
                                 {
-                                    <div @key="item.TableName" class="bg-[#0B1220] border @GetBorderClass(item.Status) p-4 rounded-2xl transition-all duration-300">
+                                    var item = kv.Value;
+                                    var itemKey = kv.Key;
+                                    bool isTerminal = item.Status is "Success" or "Error" or "Skipped";
+                                    <div @key="itemKey" class="bg-[#0B1220] border @GetBorderClass(item.Status) p-4 rounded-2xl transition-all duration-300">
                                         <div class="flex justify-between items-center mb-2.5">
                                             <div class="flex items-center gap-2.5 min-w-0">
                                                 <div class="w-2 h-2 rounded-full shrink-0 @GetDotClass(item.Status)"></div>
@@ -268,8 +417,19 @@
                                                 {
                                                     <span class="shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded @GetTypeBadgeClass(item.ItemType)">@item.ItemType</span>
                                                 }
+                                                @if (item.ItemType == "TABLE")
+                                                {
+                                                    <span class="shrink-0 text-[7px] font-black px-1.5 py-0.5 rounded @GetModeBadgeClass(item.CloneMode)">@GetModeShortLabel(item.CloneMode)</span>
+                                                }
                                             </div>
                                             <div class="flex items-center gap-2 shrink-0">
+                                                @if (!isTerminal && state == AppState.Cloning)
+                                                {
+                                                    <button @onclick="() => CancelItem(itemKey)"
+                                                            class="text-[8px] font-bold px-1.5 py-0.5 rounded border border-red-500/40 text-red-400/80 hover:bg-red-500/10 hover:border-red-500/70 hover:text-red-400 transition-all">
+                                                        HỦY
+                                                    </button>
+                                                }
                                                 <span class="text-[9px] text-gray-600 uppercase tracking-wider">@item.Status</span>
                                                 <span class="text-[11px] font-black @(item.Status == "Success" ? "text-green-400" : "text-[#0E857D]")">@item.Percentage.ToString("F0")%</span>
                                             </div>
@@ -278,9 +438,9 @@
                                             <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r @GetBarClass(item.Status)"
                                                  style="width: @(item.Percentage)%"></div>
                                         </div>
-                                        @if (item.ItemType == "TABLE")
+                                        @if (item.ItemType == "TABLE" && item.CloneMode != TableCloneMode.SchemaOnly)
                                         {
-                                            <div class="mt-1.5 flex justify-between text-[9px] font-mono text-[aqua]">
+                                            <div class="mt-1.5 flex justify-between text-[9px] font-mono text-cyan-400/70">
                                                 <span>@item.RowsCopied.ToString("N0") / @item.TotalRows.ToString("N0") rows</span>
                                                 @if (item.Status == "Success")
                                                 {
@@ -306,10 +466,21 @@
                         <div class="p-4 border-t border-white/5 bg-[#161D2B]/50 flex items-center justify-between shrink-0">
                             <div class="flex items-center gap-4">
                                 <span class="text-green-400 font-bold text-sm">@successCount success</span>
-                                @if (skippedCount > 0) { <span class="text-yellow-400 font-bold text-sm">@skippedCount skipped</span> }
-                                @if (errorCount > 0) { <span class="text-red-400 font-bold text-sm">@errorCount failed</span> }
-                                @{ var totalR = progressList.Values.Sum(p => p.RowsCopied); }
-                                @if (totalR > 0) { <span class="text-[#0E857D] font-bold text-sm">@totalR.ToString("N0") rows</span> }
+                                @if (skippedCount > 0)
+                                {
+                                    <span class="text-yellow-400 font-bold text-sm">@skippedCount skipped</span>
+                                }
+                                @if (errorCount > 0)
+                                {
+                                    <span class="text-red-400 font-bold text-sm">@errorCount failed</span>
+                                }
+                                @{
+                                    var totalR = progressList.Values.Sum(p => p.RowsCopied);
+                                }
+                                @if (totalR > 0)
+                                {
+                                    <span class="text-[#0E857D] font-bold text-sm">@totalR.ToString("N0") rows</span>
+                                }
                             </div>
                             <div class="flex items-center gap-2">
                                 <svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -328,15 +499,26 @@
 </div>
 
 <style>
-    .custom-scroll::-webkit-scrollbar { width: 4px; }
-    .custom-scroll::-webkit-scrollbar-track { background: transparent; }
-    .custom-scroll::-webkit-scrollbar-thumb { background: #1F2937; border-radius: 10px; }
-    .custom-scroll::-webkit-scrollbar-thumb:hover { background: #0E857D; }
-</style>
-@code {
-@* Scaffold-DbContext "Server=10.235.55.110;Database=EOffice_Dev;User Id=HRModule;Password=112233@HRM;Trusted_Connection=True;TrustServerCertificate=True;Integrated Security=false;" Microsoft.EntityFrameworkCore.SqlServer -OutputDir DBContext/EOffice -Force -NoOnConfiguring -Context EOfficeContext *@
-    enum AppState { Idle, Connecting, Connected, Cloning, Done }
+    .custom-scroll::-webkit-scrollbar {
+        width: 4px;
+    }
 
+    .custom-scroll::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .custom-scroll::-webkit-scrollbar-thumb {
+        background: #1F2937;
+        border-radius: 10px;
+    }
+
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+            background: #0E857D;
+        }
+</style>
+
+@code {
+    enum AppState { Idle, Connecting, Connected, Cloning, Done }
     class Config { public string Host = ""; public string DB = ""; public string User = ""; public string Pass = ""; }
 
     Config srv = new();
@@ -345,18 +527,28 @@
     AppState state = AppState.Idle;
     string connectError = "";
     int maxParallel = 4;
+    string activeTab = "TABLE";
+    string itemSearch = "";
 
+    // Tables: name → clone mode
+    Dictionary<string, TableCloneMode> tableModes = new();
     List<string> allTables = new();
-    HashSet<string> selectedTables = new();
-    string tableSearch = "";
+    Dictionary<string, long> tableRowCounts = new();
+
+    // Other objects (Views, Procedures, Functions)
+    List<DbObject> allObjects = new();      // all from source
+    List<DbObject> selectedObjects = new(); // user-selected
+
     Dictionary<string, TableCloneProgress> progressList = new();
+    Dictionary<string, CancellationTokenSource> _itemCts = new();
 
     bool isBusy => state is AppState.Connecting or AppState.Cloning;
     int successCount => progressList.Values.Count(p => p.Status == "Success");
-    int errorCount   => progressList.Values.Count(p => p.Status == "Error");
+    int errorCount => progressList.Values.Count(p => p.Status == "Error");
     int skippedCount => progressList.Values.Count(p => p.Status == "Skipped");
 
     System.Diagnostics.Stopwatch _stopwatch = new();
+
     string ElapsedDisplay
     {
         get
@@ -371,80 +563,182 @@
     string StatusLabel => state switch
     {
         AppState.Connecting => "CONNECTING",
-        AppState.Connected  => "READY",
-        AppState.Cloning    => "CLONING",
-        AppState.Done       => "DONE",
-        _                   => "IDLE"
+        AppState.Connected => "READY",
+        AppState.Cloning => "CLONING",
+        AppState.Done => "DONE",
+        _ => "IDLE"
     };
 
-    IEnumerable<string> filteredTables => string.IsNullOrWhiteSpace(tableSearch)
-        ? allTables
-        : allTables.Where(t => t.Contains(tableSearch, StringComparison.OrdinalIgnoreCase));
+    // ── Filtered lists ───────────────────────────────────────────────────────
 
-    bool allSelected => filteredTables.Any() && filteredTables.All(t => selectedTables.Contains(t));
+    IEnumerable<string> FilteredTables => string.IsNullOrWhiteSpace(itemSearch)
+        ? allTables
+        : allTables.Where(t => t.Contains(itemSearch, StringComparison.OrdinalIgnoreCase));
+
+    IEnumerable<DbObject> FilteredObjects => allObjects
+        .Where(o => o.ObjectType == activeTab)
+        .Where(o => string.IsNullOrWhiteSpace(itemSearch) || o.Name.Contains(itemSearch, StringComparison.OrdinalIgnoreCase));
+
+    // ── SelectAll logic ──────────────────────────────────────────────────────
+
+    bool IsAllSelected => activeTab == "TABLE"
+        ? FilteredTables.Any() && FilteredTables.All(t => tableModes.ContainsKey(t))
+        : FilteredObjects.Any() && FilteredObjects.All(o => selectedObjects.Any(s => s.Name == o.Name && s.ObjectType == o.ObjectType));
+
+    int GetTabCount(string tab) => tab == "TABLE"
+        ? allTables.Count
+        : allObjects.Count(o => o.ObjectType == tab);
 
     void ToggleAll()
     {
-        if (allSelected)
-            foreach (var t in filteredTables.ToList()) selectedTables.Remove(t);
+        if (activeTab == "TABLE")
+        {
+            if (IsAllSelected)
+                foreach (var t in FilteredTables.ToList()) tableModes.Remove(t);
+            else
+                foreach (var t in FilteredTables.ToList())
+                    if (!tableModes.ContainsKey(t)) tableModes[t] = TableCloneMode.SchemaOnly;
+        }
         else
-            foreach (var t in filteredTables.ToList()) selectedTables.Add(t);
+        {
+            if (IsAllSelected)
+                selectedObjects.RemoveAll(o => FilteredObjects.Any(f => f.Name == o.Name && f.ObjectType == o.ObjectType));
+            else
+                foreach (var obj in FilteredObjects)
+                    if (!selectedObjects.Any(s => s.Name == obj.Name && s.ObjectType == obj.ObjectType))
+                        selectedObjects.Add(obj);
+        }
     }
 
     void ToggleTable(string tbl)
     {
-        if (selectedTables.Contains(tbl)) selectedTables.Remove(tbl);
-        else selectedTables.Add(tbl);
+        if (tableModes.ContainsKey(tbl)) tableModes.Remove(tbl);
+        else tableModes[tbl] = TableCloneMode.SchemaAndData;
     }
+
+    void SetTableMode(string tbl, TableCloneMode mode) => tableModes[tbl] = mode;
+
+    void SetAllTablesMode(TableCloneMode mode)
+    {
+        foreach (var t in allTables)
+            tableModes[t] = mode;
+    }
+
+    void ToggleObject(DbObject obj)
+    {
+        var existing = selectedObjects.FirstOrDefault(s => s.Name == obj.Name && s.ObjectType == obj.ObjectType);
+        if (existing != null) selectedObjects.Remove(existing);
+        else selectedObjects.Add(obj);
+    }
+
+    // ── Connect ──────────────────────────────────────────────────────────────
 
     async Task Connect()
     {
         if (string.IsNullOrWhiteSpace(srv.Host) || string.IsNullOrWhiteSpace(srv.DB) ||
             string.IsNullOrWhiteSpace(srv.User) || string.IsNullOrWhiteSpace(srv.Pass))
         {
-            connectError = "Vui l�ng di?n d?y d? th�ng tin Source Server.";
-            return;
+            connectError = "Vui lòng điền đầy đủ thông tin Source Server."; return;
         }
         if (string.IsNullOrWhiteSpace(loc.Host) || string.IsNullOrWhiteSpace(loc.DB))
         {
-            connectError = "Vui l�ng di?n d?y d? th�ng tin Local Server (Host + Database).";
-            return;
+            connectError = "Vui lòng điền đầy đủ thông tin Local Server (Host + Database)."; return;
         }
         if (!useWinAuth && (string.IsNullOrWhiteSpace(loc.User) || string.IsNullOrWhiteSpace(loc.Pass)))
         {
-            connectError = "Nh?p User/Pass cho Local SQL Auth.";
-            return;
+            connectError = "Nhập User/Pass cho Local SQL Auth."; return;
         }
 
         connectError = "";
         state = AppState.Connecting;
         StateHasChanged();
 
-        try
+        // Check song song cả 2 DB (source + target) ngay tại bước connect, để không mất công
+        // tích chọn table rồi tới lúc start mới báo lỗi connect target và phải reset lại.
+        var sourceTask = LoadSourceMetadataAsync();
+        var targetTask = CloneService.TestConnectionAsync(BuildLocalConnStr);
+
+        string? sourceError = null;
+        string? targetError = null;
+        try { await sourceTask; } catch (Exception ex) { sourceError = ex.Message; }
+        try { await targetTask; } catch (Exception ex) { targetError = ex.Message; }
+
+        if (sourceError != null || targetError != null)
         {
-            allTables = await CloneService.GetTablesAsync(BuildServerConnStr);
-            selectedTables = new HashSet<string>(allTables);
-            state = AppState.Connected;
-        }
-        catch (Exception ex)
-        {
-            connectError = ex.Message;
+            var errors = new List<string>();
+            if (sourceError != null) errors.Add($"[SOURCE] {sourceError}");
+            if (targetError != null) errors.Add($"[TARGET] {targetError}");
+            connectError = string.Join("  •  ", errors);
+
+            // Xóa metadata đã load để không hiện danh sách nửa vời khi 1 trong 2 DB lỗi
+            allTables.Clear();
+            allObjects.Clear();
+            tableRowCounts.Clear();
+            tableModes.Clear();
+            selectedObjects.Clear();
+
             state = AppState.Idle;
+            return;
         }
+
+        state = AppState.Connected;
     }
+
+    /// <summary>Load tables / objects / row counts từ source.</summary>
+    async Task LoadSourceMetadataAsync()
+    {
+        var tablesTask = CloneService.GetTablesAsync(BuildServerConnStr);
+        var objectsTask = CloneService.GetObjectsAsync(BuildServerConnStr);
+        var countsTask = CloneService.GetTableRowCountsAsync(BuildServerConnStr);
+
+        await Task.WhenAll(tablesTask, objectsTask, countsTask);
+
+        allTables = tablesTask.Result;
+        allObjects = objectsTask.Result;
+        tableRowCounts = countsTask.Result;
+
+        // Default: select all tables (SchemaOnly) and all objects
+        tableModes = allTables.ToDictionary(t => t, _ => TableCloneMode.SchemaOnly);
+        selectedObjects = new List<DbObject>(allObjects);
+    }
+
+    // ── Start clone ──────────────────────────────────────────────────────────
 
     async Task StartExecution()
     {
-        if (selectedTables.Count == 0) return;
+        if (tableModes.Count == 0 && selectedObjects.Count == 0) return;
 
         state = AppState.Cloning;
-        progressList = selectedTables.ToDictionary(
-            t => t,
-            t => new TableCloneProgress { TableName = t, Status = "Pending", ItemType = "TABLE" });
+        progressList = new Dictionary<string, TableCloneProgress>();
+
+        // Init progress for tables
+        foreach (var kv in tableModes)
+            progressList[kv.Key] = new TableCloneProgress
+            {
+                TableName = kv.Key,
+                Status = "Pending",
+                ItemType = "TABLE",
+                CloneMode = kv.Value
+            };
+
+        // Init progress for objects (use Name as key; add suffix for uniqueness)
+        foreach (var obj in selectedObjects)
+        {
+            string key = $"{obj.ObjectType}::{obj.Name}";
+            progressList[key] = new TableCloneProgress
+            {
+                TableName = obj.Name,
+                Status = "Pending",
+                ItemType = obj.ObjectType
+            };
+        }
+
+        // Create per-item CancellationTokenSources
+        foreach (var cts in _itemCts.Values) cts.Dispose();
+        _itemCts = progressList.Keys.ToDictionary(k => k, _ => new CancellationTokenSource());
 
         _stopwatch.Restart();
 
-        // Vòng lặp cập nhật đồng hồ mỗi giây
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         var timerTask = Task.Run(async () =>
         {
@@ -454,68 +748,168 @@
 
         try
         {
-            await CloneService.StartClone(BuildServerConnStr, BuildLocalConnStr, selectedTables.ToList(), maxParallel, p => { 
-                                                                                                                              progressList[p.TableName] = p;
-                                                                                                                              InvokeAsync(StateHasChanged);
-                                                                                                                            });
+            await CloneService.StartClone(
+                BuildServerConnStr, BuildLocalConnStr,
+                new Dictionary<string, TableCloneMode>(tableModes),
+                new List<DbObject>(selectedObjects),
+                maxParallel,
+                p =>
+                {
+                    string key = p.ItemType == "TABLE" ? p.TableName : $"{p.ItemType}::{p.TableName}";
+                    if (progressList.ContainsKey(key))
+                        progressList[key] = p;
+                    InvokeAsync(StateHasChanged);
+                },
+                _itemCts);
         }
-        catch (Exception ex)
-        {
-            connectError = ex.Message;
-        }
+        catch (Exception ex) { connectError = ex.Message; }
 
         _stopwatch.Stop();
         state = AppState.Done;
         await InvokeAsync(StateHasChanged);
     }
 
+    void CancelItem(string key)
+    {
+        if (_itemCts.TryGetValue(key, out var cts))
+            cts.Cancel();
+    }
+
+    // ── Reset ────────────────────────────────────────────────────────────────
+
     void Reset()
     {
         state = AppState.Idle;
         progressList.Clear();
+        foreach (var cts in _itemCts.Values) cts.Dispose();
+        _itemCts.Clear();
         allTables.Clear();
-        selectedTables.Clear();
+        allObjects.Clear();
+        tableModes.Clear();
+        tableRowCounts.Clear();
+        selectedObjects.Clear();
         connectError = "";
-        tableSearch = "";
+        itemSearch = "";
+        activeTab = "TABLE";
         _stopwatch.Reset();
     }
 
-    string BuildServerConnStr => $"Server={srv.Host};Database={srv.DB};User ID={srv.User};Password={srv.Pass};TrustServerCertificate=True;";
-    string BuildLocalConnStr => useWinAuth ? $"Server={loc.Host};Database={loc.DB};Integrated Security=True;TrustServerCertificate=True;"
-                                             : $"Server={loc.Host};Database={loc.DB};User ID={loc.User};Password={loc.Pass};TrustServerCertificate=True;";
+    // ── Connection strings ───────────────────────────────────────────────────
+
+    string BuildServerConnStr =>
+        $"Server={srv.Host};Database={srv.DB};User ID={srv.User};Password={srv.Pass};TrustServerCertificate=True;";
+    string BuildLocalConnStr => useWinAuth
+        ? $"Server={loc.Host};Database={loc.DB};Integrated Security=True;TrustServerCertificate=True;"
+        : $"Server={loc.Host};Database={loc.DB};User ID={loc.User};Password={loc.Pass};TrustServerCertificate=True;";
+
+    // ── UI helpers ───────────────────────────────────────────────────────────
+
+    static string GetTabIcon(string tab) => tab switch
+    {
+        "TABLE" => "⊞",
+        "VIEW" => "◎",
+        "PROCEDURE" => "⚙",
+        "FUNCTION" => "ƒ",
+        _ => "•"
+    };
+
+    static string GetTabActiveClass(string tab) => tab switch
+    {
+        "TABLE" => "bg-[#0E857D]/20 text-[#0E857D]",
+        "VIEW" => "bg-blue-500/20 text-blue-400",
+        "PROCEDURE" => "bg-purple-500/20 text-purple-400",
+        "FUNCTION" => "bg-amber-500/20 text-amber-400",
+        _ => "bg-gray-500/20 text-gray-400"
+    };
+
+    static string GetObjectSelectedClass(string type) => type switch
+    {
+        "VIEW" => "bg-blue-500/10 border-blue-500/30",
+        "PROCEDURE" => "bg-purple-500/10 border-purple-500/30",
+        "FUNCTION" => "bg-amber-500/10 border-amber-500/30",
+        _ => "bg-[#0E857D]/10 border-[#0E857D]/30"
+    };
+
+    static string GetObjectCheckboxClass(string type) => type switch
+    {
+        "VIEW" => "border-blue-500 bg-blue-500",
+        "PROCEDURE" => "border-purple-500 bg-purple-500",
+        "FUNCTION" => "border-amber-500 bg-amber-500",
+        _ => "border-[#0E857D] bg-[#0E857D]"
+    };
+
+    static string GetModeLabel(TableCloneMode m) => m switch
+    {
+        TableCloneMode.SchemaOnly => "Schema Only (structure)",
+        TableCloneMode.DataOnly => "Data Only (truncate & refill)",
+        TableCloneMode.SchemaAndData => "Schema + Data (full clone)",
+        _ => ""
+    };
+
+    static string GetModeShortLabel(TableCloneMode m) => m switch
+    {
+        TableCloneMode.SchemaOnly => "SCHEMA",
+        TableCloneMode.DataOnly => "DATA",
+        TableCloneMode.SchemaAndData => "FULL",
+        _ => ""
+    };
+
+    static string GetModeActiveClass(TableCloneMode m) => m switch
+    {
+        TableCloneMode.SchemaOnly => "bg-blue-500/30 text-blue-300",
+        TableCloneMode.DataOnly => "bg-amber-500/30 text-amber-300",
+        TableCloneMode.SchemaAndData => "bg-[#0E857D]/30 text-[#0E857D]",
+        _ => ""
+    };
+
+    static string GetModeBadgeClass(TableCloneMode m) => m switch
+    {
+        TableCloneMode.SchemaOnly => "bg-blue-500/20 text-blue-400",
+        TableCloneMode.DataOnly => "bg-amber-500/20 text-amber-400",
+        TableCloneMode.SchemaAndData => "bg-[#0E857D]/20 text-[#0E857D]",
+        _ => "bg-gray-500/20 text-gray-400"
+    };
 
     static string GetBorderClass(string status) => status switch
     {
-        "Cloning..."  => "border-[#0E857D]/50",
-        "Success"     => "border-green-500/20",
-        "Skipped"     => "border-yellow-500/20",
-        "Error"       => "border-red-500/20",
-        _             => "border-gray-800/50"
+        "Cloning..." => "border-[#0E857D]/50",
+        "Success" => "border-green-500/20",
+        "Skipped" => "border-yellow-500/20",
+        "Error" => "border-red-500/20",
+        _ => "border-gray-800/50"
     };
 
     static string GetDotClass(string status) => status switch
     {
-        "Cloning..."  => "bg-[#0E857D] animate-pulse shadow-[0_0_6px_rgba(14,133,125,0.7)]",
-        "Waiting..."  => "bg-yellow-500 animate-pulse",
-        "Success"     => "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]",
-        "Skipped"     => "bg-yellow-400",
-        "Error"       => "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]",
-        _             => "bg-gray-600"
+        "Cloning..." => "bg-[#0E857D] animate-pulse shadow-[0_0_6px_rgba(14,133,125,0.7)]",
+        "Waiting..." => "bg-yellow-500 animate-pulse",
+        "Success" => "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]",
+        "Skipped" => "bg-yellow-400",
+        "Error" => "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]",
+        _ => "bg-gray-600"
     };
 
     static string GetBarClass(string status) => status switch
     {
         "Success" => "from-green-500 to-green-400",
         "Skipped" => "from-yellow-500 to-yellow-400",
-        "Error"   => "from-red-500 to-red-400",
-        _         => "from-[#0E857D] to-[#2DD4BF]"
+        "Error" => "from-red-500 to-red-400",
+        _ => "from-[#0E857D] to-[#2DD4BF]"
     };
 
     static string GetTypeBadgeClass(string type) => type switch
     {
-        "VIEW"      => "bg-blue-500/20 text-blue-400",
+        "VIEW" => "bg-blue-500/20 text-blue-400",
         "PROCEDURE" => "bg-purple-500/20 text-purple-400",
-        "FUNCTION"  => "bg-amber-500/20 text-amber-400",
-        _           => "bg-gray-500/20 text-gray-400"
+        "FUNCTION" => "bg-amber-500/20 text-amber-400",
+        _ => "bg-gray-500/20 text-gray-400"
+    };
+
+    static string FormatRowCount(long count) => count switch
+    {
+        0 => "—",
+        < 1_000 => count.ToString("N0"),
+        < 1_000_000 => $"{count / 1_000.0:F1}K",
+        _ => $"{count / 1_000_000.0:F1}M"
     };
 }
