@@ -35,6 +35,18 @@ namespace CloneDB
             "sysdiagrams", "__MigrationHistory", "__EFMigrationsHistory"
         };
 
+        /// <summary>Mô tả 1 khóa ngoại (hỗ trợ nhiều cột) để dựng lại sau khi drop/create table.</summary>
+        private sealed class ForeignKeyDef
+        {
+            public string Name { get; set; } = "";
+            public string ParentTable { get; set; } = "";
+            public string RefTable { get; set; } = "";
+            public List<string> Columns { get; } = new();
+            public List<string> RefColumns { get; } = new();
+            public string OnDelete { get; set; } = "NO_ACTION";
+            public string OnUpdate { get; set; } = "NO_ACTION";
+        }
+
         /// <summary>Test kết nối tới 1 server (mở connection + query nhẹ), throw nếu không connect được.</summary>
         public async Task TestConnectionAsync(string connStr)
         {
@@ -146,6 +158,9 @@ namespace CloneDB
                 await localConn.OpenAsync();
                 await ExecuteNonQuery(localConn, "EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'");
 
+                // Các khóa ngoại bị gỡ tạm để drop được bảng, sẽ dựng lại ở cuối phase 1.
+                var pendingFks = new List<ForeignKeyDef>();
+
                 foreach (var tbl in tablesNeedingSchema)
                 {
                     var ct = itemCts != null && itemCts.TryGetValue(tbl, out var cts) ? cts.Token : CancellationToken.None;
@@ -163,7 +178,7 @@ namespace CloneDB
                     });
                     using var srvConn = new SqlConnection(serverStr);
                     await srvConn.OpenAsync();
-                    await RebuildTableSchema(srvConn, localConn, tbl);
+                    await RebuildTableSchema(srvConn, localConn, tbl, pendingFks);
                 }
 
                 // DataOnly: chỉ TRUNCATE, không rebuild schema
@@ -176,7 +191,20 @@ namespace CloneDB
                         ItemType = "TABLE",
                         CloneMode = tableModes[tbl]
                     });
-                    await ExecuteNonQuery(localConn, $"IF OBJECT_ID(N'[{tbl}]','U') IS NOT NULL TRUNCATE TABLE [{tbl}]");
+                    await ClearTableData(localConn, tbl);
+                }
+
+                // Dựng lại các khóa ngoại còn thiếu (bị gỡ để drop bảng, hoặc lúc tạo bảng thì bảng đích chưa có).
+                if (pendingFks.Count > 0)
+                {
+                    foreach (var fk in pendingFks)
+                    {
+                        try { await ExecuteNonQuery(localConn, BuildAddForeignKeySql(fk)); }
+                        catch { /* bo qua neu bang cha/bang dich khong con khop */ }
+                    }
+
+                    // Tắt lại constraint để phase bulk copy không bị chặn bởi các khóa ngoại vừa dựng.
+                    await ExecuteNonQuery(localConn, "EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'");
                 }
             }
 
@@ -392,7 +420,7 @@ namespace CloneDB
             return (result != null && result != DBNull.Value) ? Convert.ToInt64(result) : 0;
         }
 
-        private async Task RebuildTableSchema(SqlConnection srv, SqlConnection loc, string tbl)
+        private async Task RebuildTableSchema(SqlConnection srv, SqlConnection loc, string tbl, List<ForeignKeyDef> pendingFks)
         {
             // 1. Schema cot
             using var cmd = new SqlCommand($"SELECT TOP 0 * FROM [{tbl}]", srv);
@@ -505,31 +533,21 @@ namespace CloneDB
                     checkConstraints[ckReader.GetString(0)] = ckReader.GetString(1);
             }
 
-            // 7. FOREIGN KEY
-            var foreignKeys = new List<(string FkName, string FkCol, string RefTable, string RefCol, string OnDelete, string OnUpdate)>();
-            using (var fkCmd = new SqlCommand(@"
-                SELECT
-                    fk.name                         AS fk_name,
-                    c_src.name                      AS fk_col,
-                    OBJECT_NAME(fk.referenced_object_id) AS ref_table,
-                    c_ref.name                      AS ref_col,
-                    fk.delete_referential_action_desc,
-                    fk.update_referential_action_desc
-                FROM sys.foreign_keys fk
-                JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-                JOIN sys.columns c_src ON fkc.parent_object_id    = c_src.object_id AND fkc.parent_column_id    = c_src.column_id
-                JOIN sys.columns c_ref ON fkc.referenced_object_id = c_ref.object_id AND fkc.referenced_column_id = c_ref.column_id
-                WHERE fk.parent_object_id = OBJECT_ID(@tbl)
-                ORDER BY fk.name, fkc.constraint_column_id", srv))
-            {
-                fkCmd.Parameters.AddWithValue("@tbl", tbl);
-                using var fkReader = await fkCmd.ExecuteReaderAsync();
-                while (await fkReader.ReadAsync())
-                    foreignKeys.Add((
-                        fkReader.GetString(0), fkReader.GetString(1),
-                        fkReader.GetString(2), fkReader.GetString(3),
-                        fkReader.GetString(4), fkReader.GetString(5)));
-            }
+            // 7. FOREIGN KEY (gom theo tên constraint để giữ đúng khóa ngoại nhiều cột)
+            var foreignKeys = await ReadForeignKeys(srv, @"
+                select fk.name                              as fk_name,
+                       object_name(fk.parent_object_id)     as parent_table,
+                       c_src.name                           as fk_col,
+                       object_name(fk.referenced_object_id) as ref_table,
+                       c_ref.name                           as ref_col,
+                       fk.delete_referential_action_desc,
+                       fk.update_referential_action_desc
+                from sys.foreign_keys fk
+                join sys.foreign_key_columns fkc on fk.object_id = fkc.constraint_object_id
+                join sys.columns c_src on fkc.parent_object_id     = c_src.object_id and fkc.parent_column_id     = c_src.column_id
+                join sys.columns c_ref on fkc.referenced_object_id = c_ref.object_id and fkc.referenced_column_id = c_ref.column_id
+                where fk.parent_object_id = object_id(@tbl)
+                order by fk.name, fkc.constraint_column_id", tbl);
 
             // 8. TRIGGER definitions
             var triggers = new Dictionary<string, string>();
@@ -596,6 +614,10 @@ namespace CloneDB
             foreach (var (ckName, ckDef) in checkConstraints)
                 colDefs.Add($"CONSTRAINT [{ckName}] CHECK {ckDef}");
 
+            // Gỡ các khóa ngoại từ bảng khác đang trỏ tới bảng này, nếu không SQL Server chặn drop table
+            // (tắt constraint bằng NOCHECK vẫn bị chặn). Chúng được dựng lại ở cuối phase rebuild schema.
+            await DropIncomingForeignKeys(loc, tbl, pendingFks);
+
             await ExecuteNonQuery(loc, $"IF OBJECT_ID(N'[{tbl}]','U') IS NOT NULL DROP TABLE [{tbl}]");
             await ExecuteNonQuery(loc, $"CREATE TABLE [{tbl}] ({string.Join(", ", colDefs)})");
 
@@ -611,16 +633,16 @@ namespace CloneDB
                 catch { /* bo qua filtered / computed index */ }
             }
 
-            // Foreign Keys
-            foreach (var (fkName, fkCol, refTable, refCol, onDelete, onUpdate) in foreignKeys)
+            // Foreign Keys — bảng đích có thể chưa được tạo, khi đó để dành dựng lại ở cuối phase
+            foreach (var fk in foreignKeys)
             {
-                string del = onDelete == "NO_ACTION" ? "" : $" ON DELETE {onDelete.Replace("_", " ")}";
-                string upd = onUpdate == "NO_ACTION" ? "" : $" ON UPDATE {onUpdate.Replace("_", " ")}";
-                string fkSql = $@"IF OBJECT_ID(N'{fkName}','F') IS NOT NULL ALTER TABLE [{tbl}] DROP CONSTRAINT [{fkName}]
-                    ALTER TABLE [{tbl}] ADD CONSTRAINT [{fkName}]
-                        FOREIGN KEY ([{fkCol}]) REFERENCES [{refTable}] ([{refCol}]){del}{upd}";
-                try { await ExecuteNonQuery(loc, fkSql); }
-                catch { /* bo qua neu ref table chua ton tai */ }
+                if (!await TableExists(loc, fk.RefTable))
+                {
+                    AddPendingFk(pendingFks, fk);
+                    continue;
+                }
+                try { await ExecuteNonQuery(loc, BuildAddForeignKeySql(fk)); }
+                catch { AddPendingFk(pendingFks, fk); }
             }
 
             // Triggers
@@ -708,6 +730,99 @@ namespace CloneDB
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync()) list.Add(r.GetString(0));
             return list;
+        }
+
+        /// <summary>Đọc khóa ngoại theo 1 câu query, gom nhiều dòng cùng tên constraint thành 1 khóa ngoại nhiều cột.</summary>
+        private async Task<List<ForeignKeyDef>> ReadForeignKeys(SqlConnection conn, string sql, string tbl)
+        {
+            var byName = new Dictionary<string, ForeignKeyDef>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@tbl", tbl);
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                string fkName = reader.GetString(0);
+                if (!byName.TryGetValue(fkName, out var fk))
+                {
+                    fk = new ForeignKeyDef
+                    {
+                        Name = fkName,
+                        ParentTable = reader.GetString(1),
+                        RefTable = reader.GetString(3),
+                        OnDelete = reader.GetString(5),
+                        OnUpdate = reader.GetString(6)
+                    };
+                    byName[fkName] = fk;
+                }
+                fk.Columns.Add(reader.GetString(2));
+                fk.RefColumns.Add(reader.GetString(4));
+            }
+            return byName.Values.ToList();
+        }
+
+        /// <summary>
+        /// Gỡ mọi khóa ngoại từ bảng khác đang trỏ tới <paramref name="tbl"/> trên local và ghi lại vào
+        /// <paramref name="pendingFks"/> để dựng lại sau. Khóa ngoại tự trỏ vào chính nó không cần gỡ vì drop table xóa luôn.
+        /// </summary>
+        private async Task DropIncomingForeignKeys(SqlConnection loc, string tbl, List<ForeignKeyDef> pendingFks)
+        {
+            var incoming = await ReadForeignKeys(loc, @"
+                select fk.name                              as fk_name,
+                       object_name(fk.parent_object_id)     as parent_table,
+                       c_src.name                           as fk_col,
+                       object_name(fk.referenced_object_id) as ref_table,
+                       c_ref.name                           as ref_col,
+                       fk.delete_referential_action_desc,
+                       fk.update_referential_action_desc
+                from sys.foreign_keys fk
+                join sys.foreign_key_columns fkc on fk.object_id = fkc.constraint_object_id
+                join sys.columns c_src on fkc.parent_object_id     = c_src.object_id and fkc.parent_column_id     = c_src.column_id
+                join sys.columns c_ref on fkc.referenced_object_id = c_ref.object_id and fkc.referenced_column_id = c_ref.column_id
+                where fk.referenced_object_id = object_id(@tbl)
+                  and fk.parent_object_id    <> object_id(@tbl)
+                order by fk.name, fkc.constraint_column_id", tbl);
+
+            foreach (var fk in incoming)
+            {
+                await ExecuteNonQuery(loc,
+                    $"if object_id(N'[{fk.Name}]','F') is not null alter table [{fk.ParentTable}] drop constraint [{fk.Name}]");
+                AddPendingFk(pendingFks, fk);
+            }
+        }
+
+        private static void AddPendingFk(List<ForeignKeyDef> pendingFks, ForeignKeyDef fk)
+        {
+            if (!pendingFks.Any(p => string.Equals(p.Name, fk.Name, StringComparison.OrdinalIgnoreCase)))
+                pendingFks.Add(fk);
+        }
+
+        /// <summary>Sinh câu lệnh thêm khóa ngoại, tự bỏ qua nếu constraint đã có hoặc 2 bảng chưa sẵn sàng.</summary>
+        private static string BuildAddForeignKeySql(ForeignKeyDef fk)
+        {
+            string cols = string.Join(", ", fk.Columns.Select(c => $"[{c}]"));
+            string refCols = string.Join(", ", fk.RefColumns.Select(c => $"[{c}]"));
+            string del = fk.OnDelete == "NO_ACTION" ? "" : $" on delete {fk.OnDelete.Replace("_", " ")}";
+            string upd = fk.OnUpdate == "NO_ACTION" ? "" : $" on update {fk.OnUpdate.Replace("_", " ")}";
+            return $@"if object_id(N'[{fk.Name}]','F') is null
+                      and object_id(N'[{fk.ParentTable}]','U') is not null
+                      and object_id(N'[{fk.RefTable}]','U')    is not null
+                        alter table [{fk.ParentTable}] with nocheck add constraint [{fk.Name}]
+                            foreign key ({cols}) references [{fk.RefTable}] ({refCols}){del}{upd}";
+        }
+
+        private async Task<bool> TableExists(SqlConnection conn, string tbl)
+        {
+            using var cmd = new SqlCommand("select object_id(@tbl, 'U')", conn);
+            cmd.Parameters.AddWithValue("@tbl", tbl);
+            var result = await cmd.ExecuteScalarAsync();
+            return result != null && result != DBNull.Value;
+        }
+
+        /// <summary>Xóa sạch dữ liệu 1 bảng: ưu tiên TRUNCATE, nếu bị khóa ngoại chặn thì fallback DELETE.</summary>
+        private async Task ClearTableData(SqlConnection conn, string tbl)
+        {
+            try { await ExecuteNonQuery(conn, $"if object_id(N'[{tbl}]','U') is not null truncate table [{tbl}]"); }
+            catch { await ExecuteNonQuery(conn, $"if object_id(N'[{tbl}]','U') is not null delete from [{tbl}]"); }
         }
 
         private async Task<bool> CheckIdentity(SqlConnection conn, string tbl)

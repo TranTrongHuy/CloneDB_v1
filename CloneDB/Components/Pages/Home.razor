@@ -571,9 +571,10 @@
 
     // ── Filtered lists ───────────────────────────────────────────────────────
 
-    IEnumerable<string> FilteredTables => string.IsNullOrWhiteSpace(itemSearch)
+    IEnumerable<string> FilteredTables => (string.IsNullOrWhiteSpace(itemSearch)
         ? allTables
-        : allTables.Where(t => t.Contains(itemSearch, StringComparison.OrdinalIgnoreCase));
+        : allTables.Where(t => t.Contains(itemSearch, StringComparison.OrdinalIgnoreCase)))
+        .OrderByDescending(t => tableRowCounts.TryGetValue(t, out var rc) ? rc : -1);
 
     IEnumerable<DbObject> FilteredObjects => allObjects
         .Where(o => o.ObjectType == activeTab)
