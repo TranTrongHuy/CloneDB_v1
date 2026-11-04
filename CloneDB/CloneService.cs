@@ -63,7 +63,7 @@ namespace CloneDB
             using var conn = new SqlConnection(serverStr);
             await conn.OpenAsync();
             using var cmd = new SqlCommand(
-                "SELECT name FROM sys.tables WHERE is_ms_shipped = 0 ORDER BY name", conn);
+                "SELECT name FROM sys.tables WHERE is_ms_shipped = 0 and schema_id = schema_id('dbo') ORDER BY name", conn);
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
@@ -85,6 +85,7 @@ namespace CloneDB
                 FROM sys.tables t
                 LEFT JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
                 WHERE t.is_ms_shipped = 0
+                  and t.schema_id = schema_id('dbo')
                 GROUP BY t.name", conn);
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -105,6 +106,7 @@ namespace CloneDB
                 JOIN sys.objects o ON o.object_id = m.object_id
                 WHERE o.type IN ('V', 'P', 'FN', 'IF', 'TF')
                   AND o.is_ms_shipped = 0
+                  and o.schema_id = schema_id('dbo')
                 ORDER BY CASE o.type
                     WHEN 'V'  THEN 1
                     WHEN 'FN' THEN 2 WHEN 'IF' THEN 2 WHEN 'TF' THEN 2
@@ -490,9 +492,9 @@ namespace CloneDB
             }
 
             // 5. Non-PK INDEXES (CLUSTERED / NONCLUSTERED, ASC / DESC)
-            var indexes = new Dictionary<string, (bool IsUnique, bool IsClustered, List<string> Columns)>();
+            var indexes = new Dictionary<string, (bool IsUnique, bool IsClustered, string? FilterDefinition, List<string> Columns)>();
             using (var idxCmd = new SqlCommand(@"
-                SELECT i.name, i.is_unique, i.type, c.name AS col_name, ic.is_descending_key
+                SELECT i.name, i.is_unique, i.type, c.name AS col_name, ic.is_descending_key, i.filter_definition
                 FROM sys.indexes i
                 JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                 JOIN sys.columns c        ON ic.object_id = c.object_id AND ic.column_id = c.column_id
@@ -512,9 +514,10 @@ namespace CloneDB
                     bool isClustered = idxReader.GetByte(2) == 1;
                     string colName = idxReader.GetString(3);
                     bool isDesc = idxReader.GetBoolean(4);
+                    string? filterDefinition = idxReader.IsDBNull(5) ? null : idxReader.GetString(5);
                     string colEntry = isDesc ? $"[{colName}] DESC" : $"[{colName}]";
                     if (!indexes.ContainsKey(idxName))
-                        indexes[idxName] = (isUnique, isClustered, new List<string>());
+                        indexes[idxName] = (isUnique, isClustered, filterDefinition, new List<string>());
                     indexes[idxName].Columns.Add(colEntry);
                 }
             }
@@ -629,8 +632,9 @@ namespace CloneDB
                 string unique = info.IsUnique ? "UNIQUE " : "";
                 string cluster = info.IsClustered ? "CLUSTERED" : "NONCLUSTERED";
                 string cols = string.Join(", ", info.Columns);
-                try { await ExecuteNonQuery(loc, $"CREATE {unique}{cluster} INDEX [{idxName}] ON [{tbl}] ({cols})"); }
-                catch { /* bo qua filtered / computed index */ }
+                string where = string.IsNullOrEmpty(info.FilterDefinition) ? "" : $" WHERE {info.FilterDefinition}";
+                try { await ExecuteNonQuery(loc, $"CREATE {unique}{cluster} INDEX [{idxName}] ON [{tbl}] ({cols}){where}"); }
+                catch { /* bo qua computed index */ }
             }
 
             // Foreign Keys — bảng đích có thể chưa được tạo, khi đó để dành dựng lại ở cuối phase

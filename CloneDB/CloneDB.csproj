@@ -16,6 +16,16 @@
         <OutputType>Exe</OutputType>
         <RootNamespace>CloneDB</RootNamespace>
         <UseMaui>true</UseMaui>
+        <!-- Workload MAUI của SDK .NET 10 không còn tự gán MauiVersion cho net8.0 nên phải khai báo rõ -->
+        <MauiVersion>8.0.100</MauiVersion>
+        <!-- Chạy thẳng file exe không cần đóng gói MSIX, tránh lỗi Class not registered của Windows App SDK -->
+        <WindowsPackageType>None</WindowsPackageType>
+        <!-- Gói kèm Windows App SDK vào thư mục build, không phụ thuộc runtime cài trên máy -->
+        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+        <!-- Chế độ self-contained bắt buộc có kiến trúc cụ thể; Visual Studio build với AnyCPU thì không giải nén được MsixContent nên phải gán RID -->
+        <RuntimeIdentifier Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">win-x64</RuntimeIdentifier>
+        <!-- Tắt hàm Main tự sinh (bản build mới không gắn [STAThread] làm WebView2 lỗi RPC_E_CHANGED_MODE), dùng Main tự viết trong Platforms/Windows/Program.cs -->
+        <DefineConstants Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
         <SingleProject>true</SingleProject>
         <ImplicitUsings>enable</ImplicitUsings>
         <EnableDefaultCssItems>false</EnableDefaultCssItems>
