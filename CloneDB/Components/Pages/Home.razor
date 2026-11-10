@@ -222,8 +222,23 @@
                         }
                         else
                         {
-                            <div class="flex justify-between items-center">
-                                <h3 class="font-bold text-gray-300 text-sm">Clone Pipeline</h3>
+                            <div class="flex justify-between items-center gap-3 flex-wrap">
+                                <div class="flex items-center gap-4">
+                                    <h3 class="font-bold text-gray-300 text-sm">Clone Pipeline</h3>
+                                    <!-- Checkbox ẩn/hiện các mục đã clone xong (Success) -->
+                                    <div @onclick="() => hideCompleted = !hideCompleted"
+                                         class="flex items-center gap-2 cursor-pointer select-none">
+                                        <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(hideCompleted ? "border-[#0E857D] bg-[#0E857D]" : "border-gray-600")">
+                                            @if (hideCompleted)
+                                            {
+                                                <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                                                </svg>
+                                            }
+                                        </div>
+                                        <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ẩn mục đã xong</span>
+                                    </div>
+                                </div>
                                 <div class="flex items-center gap-3 text-[10px] font-mono font-bold">
                                     <span class="text-green-400">✓ @successCount ok</span>
                                     @if (errorCount > 0)
@@ -403,55 +418,115 @@
                         {
                             <!-- Progress view -->
                             <div class="space-y-3">
-                                @foreach (var kv in progressList.OrderBy(x => x.Value.ItemType).ThenBy(x => x.Value.TableName))
+                                @foreach (var groupType in ObjectTypeOrder)
                                 {
-                                    var item = kv.Value;
-                                    var itemKey = kv.Key;
-                                    bool isTerminal = item.Status is "Success" or "Error" or "Skipped";
-                                    <div @key="itemKey" class="bg-[#0B1220] border @GetBorderClass(item.Status) p-4 rounded-2xl transition-all duration-300">
-                                        <div class="flex justify-between items-center mb-2.5">
-                                            <div class="flex items-center gap-2.5 min-w-0">
-                                                <div class="w-2 h-2 rounded-full shrink-0 @GetDotClass(item.Status)"></div>
-                                                <span class="text-xs font-mono text-gray-300 truncate max-w-[180px]">@item.TableName</span>
-                                                @if (item.ItemType != "TABLE")
-                                                {
-                                                    <span class="shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded @GetTypeBadgeClass(item.ItemType)">@item.ItemType</span>
-                                                }
-                                                @if (item.ItemType == "TABLE")
-                                                {
-                                                    <span class="shrink-0 text-[7px] font-black px-1.5 py-0.5 rounded @GetModeBadgeClass(item.CloneMode)">@GetModeShortLabel(item.CloneMode)</span>
-                                                }
+                                    // Gom các mục cùng loại (TABLE/VIEW/PROCEDURE/FUNCTION) thành 1 nhóm có thể mở/thu gọn
+                                    var groupItems = progressList.Where(x => x.Value.ItemType == groupType)
+                                                                 .OrderBy(x => x.Value.TableName)
+                                                                 .ToList();
+
+                                    if (groupItems.Count == 0) continue;
+
+                                    int groupDone = groupItems.Count(x => x.Value.Status == "Success");
+                                    int groupErr = groupItems.Count(x => x.Value.Status == "Error");
+                                    int groupSkip = groupItems.Count(x => x.Value.Status == "Skipped");
+                                    int groupRunning = groupItems.Count(x => x.Value.Status is "Cloning..." or "Preparing..." or "Waiting...");
+                                    double groupPercent = groupItems.Average(x => x.Value.Percentage);
+                                    bool expanded = expandedGroups.Contains(groupType);
+                                    var visibleItems = hideCompleted ? groupItems.Where(x => x.Value.Status != "Success").ToList() : groupItems;
+
+                                    <div @key="@($"group_{groupType}")" class="rounded-2xl border border-white/5 bg-[#161D2B]/40 overflow-hidden">
+                                        <div @onclick="() => ToggleGroup(groupType)"
+                                             class="flex items-center gap-3 p-3.5 cursor-pointer select-none hover:bg-white/5 transition-all">
+                                            <svg class="w-3.5 h-3.5 text-gray-500 shrink-0 transition-transform duration-200 @(expanded ? "rotate-90" : "")" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                                            </svg>
+                                            <span class="shrink-0 text-[10px] font-black px-2 py-1 rounded-lg @GetTabActiveClass(groupType)">@GetTabIcon(groupType) @groupType</span>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="w-full bg-[#0B1220] h-1.5 rounded-full overflow-hidden">
+                                                    <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r @(groupDone == groupItems.Count ? "from-green-500 to-green-400" : "from-[#0E857D] to-[#2DD4BF]")"
+                                                         style="width: @(groupPercent.ToString("F0"))%"></div>
+                                                </div>
                                             </div>
-                                            <div class="flex items-center gap-2 shrink-0">
-                                                @if (!isTerminal && state == AppState.Cloning)
+                                            <div class="flex items-center gap-2 shrink-0 text-[10px] font-mono font-bold">
+                                                @if (groupRunning > 0)
                                                 {
-                                                    <button @onclick="() => CancelItem(itemKey)"
-                                                            class="text-[8px] font-bold px-1.5 py-0.5 rounded border border-red-500/40 text-red-400/80 hover:bg-red-500/10 hover:border-red-500/70 hover:text-red-400 transition-all">
-                                                        HỦY
-                                                    </button>
+                                                    <span class="text-[#0E857D]">⟳ @groupRunning</span>
                                                 }
-                                                <span class="text-[9px] text-gray-600 uppercase tracking-wider">@item.Status</span>
-                                                <span class="text-[11px] font-black @(item.Status == "Success" ? "text-green-400" : "text-[#0E857D]")">@item.Percentage.ToString("F0")%</span>
+
+                                                @if (groupErr > 0)
+                                                {
+                                                    <span class="text-red-400">✗ @groupErr</span>
+                                                }
+
+                                                @if (groupSkip > 0)
+                                                {
+                                                    <span class="text-yellow-400">⊘ @groupSkip</span>
+                                                }
+                                                <span class="@(groupDone == groupItems.Count ? "text-green-400" : "text-gray-400")">@groupDone/@groupItems.Count</span>
                                             </div>
                                         </div>
-                                        <div class="w-full bg-[#161D2B] h-1.5 rounded-full overflow-hidden">
-                                            <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r @GetBarClass(item.Status)"
-                                                 style="width: @(item.Percentage)%"></div>
-                                        </div>
-                                        @if (item.ItemType == "TABLE" && item.CloneMode != TableCloneMode.SchemaOnly)
+
+                                        @if (expanded)
                                         {
-                                            <div class="mt-1.5 flex justify-between text-[9px] font-mono text-cyan-400/70">
-                                                <span>@item.RowsCopied.ToString("N0") / @item.TotalRows.ToString("N0") rows</span>
-                                                @if (item.Status == "Success")
+                                            <div class="space-y-3 p-3 pt-0">
+                                                @if (visibleItems.Count == 0)
                                                 {
-                                                    <span class="text-green-500/70">done</span>
+                                                    <div class="text-center py-4 text-[11px] text-gray-600">Tất cả @groupType.ToLower() đã clone xong</div>
                                                 }
-                                            </div>
-                                        }
-                                        @if (!string.IsNullOrEmpty(item.Message))
-                                        {
-                                            <div class="mt-2 text-[9px] font-mono break-all p-2 rounded-lg border @(item.Status == "Skipped" ? "text-yellow-400/80 bg-yellow-500/5 border-yellow-500/10" : "text-red-400/80 bg-red-500/5 border-red-500/10")">
-                                                @(item.Status == "Skipped" ? "SKIP: " : "ERR: ")@item.Message
+                                                @foreach (var kv in visibleItems)
+                                                {
+                                                    var item = kv.Value;
+                                                    var itemKey = kv.Key;
+                                                    bool isTerminal = item.Status is "Success" or "Error" or "Skipped";
+                                                    <div @key="itemKey" class="bg-[#0B1220] border @GetBorderClass(item.Status) p-4 rounded-2xl transition-all duration-300">
+                                                        <div class="flex justify-between items-center mb-2.5">
+                                                            <div class="flex items-center gap-2.5 min-w-0">
+                                                                <div class="w-2 h-2 rounded-full shrink-0 @GetDotClass(item.Status)"></div>
+                                                                <span class="text-xs font-mono text-gray-300 truncate max-w-[180px]">@item.TableName</span>
+                                                                @if (item.ItemType != "TABLE")
+                                                                {
+                                                                    <span class="shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded @GetTypeBadgeClass(item.ItemType)">@item.ItemType</span>
+                                                                }
+                                                                @if (item.ItemType == "TABLE")
+                                                                {
+                                                                    <span class="shrink-0 text-[7px] font-black px-1.5 py-0.5 rounded @GetModeBadgeClass(item.CloneMode)">@GetModeShortLabel(item.CloneMode)</span>
+                                                                }
+                                                            </div>
+                                                            <div class="flex items-center gap-2 shrink-0">
+                                                                @if (!isTerminal && state == AppState.Cloning)
+                                                                {
+                                                                    <button @onclick="() => CancelItem(itemKey)"
+                                                                            class="text-[8px] font-bold px-1.5 py-0.5 rounded border border-red-500/40 text-red-400/80 hover:bg-red-500/10 hover:border-red-500/70 hover:text-red-400 transition-all">
+                                                                        HỦY
+                                                                    </button>
+                                                                }
+                                                                <span class="text-[9px] text-gray-600 uppercase tracking-wider">@item.Status</span>
+                                                                <span class="text-[11px] font-black @(item.Status == "Success" ? "text-green-400" : "text-[#0E857D]")">@item.Percentage.ToString("F0")%</span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="w-full bg-[#161D2B] h-1.5 rounded-full overflow-hidden">
+                                                            <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r @GetBarClass(item.Status)"
+                                                                 style="width: @(item.Percentage)%"></div>
+                                                        </div>
+                                                        @if (item.ItemType == "TABLE" && item.CloneMode != TableCloneMode.SchemaOnly)
+                                                        {
+                                                            <div class="mt-1.5 flex justify-between text-[9px] font-mono text-cyan-400/70">
+                                                                <span>@item.RowsCopied.ToString("N0") / @item.TotalRows.ToString("N0") rows</span>
+                                                                @if (item.Status == "Success")
+                                                                {
+                                                                    <span class="text-green-500/70">done</span>
+                                                                }
+                                                            </div>
+                                                        }
+                                                        @if (!string.IsNullOrEmpty(item.Message))
+                                                        {
+                                                            <div class="mt-2 text-[9px] font-mono break-all p-2 rounded-lg border @(item.Status == "Skipped" ? "text-yellow-400/80 bg-yellow-500/5 border-yellow-500/10" : "text-red-400/80 bg-red-500/5 border-red-500/10")">
+                                                                @(item.Status == "Skipped" ? "SKIP: " : "ERR: ")@item.Message
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
                                             </div>
                                         }
                                     </div>
@@ -529,6 +604,14 @@
     int maxParallel = 4;
     string activeTab = "TABLE";
     string itemSearch = "";
+
+    // Ẩn các mục đã clone xong (Success) ở màn hình tiến trình
+    bool hideCompleted = false;
+
+    // Các nhóm loại đối tượng đang được mở rộng ở màn hình tiến trình (mặc định thu gọn)
+    HashSet<string> expandedGroups = new();
+
+    static readonly string[] ObjectTypeOrder = { "TABLE", "VIEW", "PROCEDURE", "FUNCTION" };
 
     // Tables: name → clone mode
     Dictionary<string, TableCloneMode> tableModes = new();
@@ -711,6 +794,8 @@
 
         state = AppState.Cloning;
         progressList = new Dictionary<string, TableCloneProgress>();
+        expandedGroups.Clear();
+        hideCompleted = false;
 
         // Init progress for tables
         foreach (var kv in tableModes)
@@ -770,6 +855,11 @@
         await InvokeAsync(StateHasChanged);
     }
 
+    void ToggleGroup(string groupType)
+    {
+        if (!expandedGroups.Remove(groupType)) expandedGroups.Add(groupType);
+    }
+
     void CancelItem(string key)
     {
         if (_itemCts.TryGetValue(key, out var cts))
@@ -792,6 +882,8 @@
         connectError = "";
         itemSearch = "";
         activeTab = "TABLE";
+        expandedGroups.Clear();
+        hideCompleted = false;
         _stopwatch.Reset();
     }
 

@@ -1,0 +1,19 @@
+{
+  "LocalViewConfig": {
+    "ScanMode": "Auto",
+    "IssueDiffType": "All",
+    "CoverityIssueDiffType": [],
+    "SelectedScanType": "Sigma",
+    "SelectedScanConfig": "",
+    "SelectedHistoricalScanConfig": "",
+    "ActiveTab": "Local",
+    "LocalViewIssuesTablesColumns": {
+      "Polaris": [],
+      "Sigma": [],
+      "Coverity": [],
+      "CoverityCli": [],
+      "BlackDuck": [],
+      "Unspecified": []
+    }
+  }
+}
