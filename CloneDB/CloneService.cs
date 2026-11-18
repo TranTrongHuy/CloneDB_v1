@@ -1,5 +1,6 @@
 ﻿using Microsoft.Data.SqlClient;
 using System.Data;
+using System.Text;
 
 namespace CloneDB
 {
@@ -359,6 +360,9 @@ namespace CloneDB
             using var locConn = new SqlConnection(localStr);
             await locConn.OpenAsync();
 
+            // Tạo trước các kiểu dữ liệu do người dùng định nghĩa mà procedure/function có thể dùng làm tham số hoặc biến
+            await EnsureUserDefinedTypesAsync(serverStr, locConn);
+
             foreach (var obj in objects)
             {
                 if (!definitions.TryGetValue(obj.Name, out var def)) continue;
@@ -602,26 +606,36 @@ namespace CloneDB
                 return $"[{colName}] {typeDef} {identity} {defVal} {nullable}".Trim();
             }).ToList();
 
-            if (pkColumns.Count > 0)
-            {
-                string pkCols = string.Join(", ", pkColumns.Select(c => $"[{c}]"));
-                colDefs.Add($"CONSTRAINT [{pkName}] PRIMARY KEY ({pkCols})");
-            }
-
-            foreach (var (ucName, ucCols) in uniqueConstraints)
-            {
-                string cols = string.Join(", ", ucCols.Select(c => $"[{c}]"));
-                colDefs.Add($"CONSTRAINT [{ucName}] UNIQUE ({cols})");
-            }
-
-            foreach (var (ckName, ckDef) in checkConstraints)
-                colDefs.Add($"CONSTRAINT [{ckName}] CHECK {ckDef}");
-
             // Gỡ các khóa ngoại từ bảng khác đang trỏ tới bảng này, nếu không SQL Server chặn drop table
             // (tắt constraint bằng NOCHECK vẫn bị chặn). Chúng được dựng lại ở cuối phase rebuild schema.
             await DropIncomingForeignKeys(loc, tbl, pendingFks);
 
             await ExecuteNonQuery(loc, $"IF OBJECT_ID(N'[{tbl}]','U') IS NOT NULL DROP TABLE [{tbl}]");
+
+            // Bảng cũ đã drop nên tên ràng buộc nào còn tồn tại trên DB đích là đang bị object khác chiếm,
+            // khi đó bỏ tên để SQL Server tự sinh tên, tránh lỗi trùng tên làm không tạo được bảng
+            var constraintNames = uniqueConstraints.Keys.Concat(checkConstraints.Keys).ToList();
+
+            if (pkColumns.Count > 0) constraintNames.Add(pkName);
+
+            var takenNames = await GetExistingObjectNamesAsync(loc, constraintNames);
+            string NamePart(string name) => takenNames.Contains(name) ? "" : $"CONSTRAINT [{name}] ";
+
+            if (pkColumns.Count > 0)
+            {
+                string pkCols = string.Join(", ", pkColumns.Select(c => $"[{c}]"));
+                colDefs.Add($"{NamePart(pkName)}PRIMARY KEY ({pkCols})");
+            }
+
+            foreach (var (ucName, ucCols) in uniqueConstraints)
+            {
+                string cols = string.Join(", ", ucCols.Select(c => $"[{c}]"));
+                colDefs.Add($"{NamePart(ucName)}UNIQUE ({cols})");
+            }
+
+            foreach (var (ckName, ckDef) in checkConstraints)
+                colDefs.Add($"{NamePart(ckName)}CHECK {ckDef}");
+
             await ExecuteNonQuery(loc, $"CREATE TABLE [{tbl}] ({string.Join(", ", colDefs)})");
 
             // ── POST CREATE TABLE ──────────────────────────────────────────────
@@ -840,6 +854,209 @@ namespace CloneDB
         {
             using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 0 };
             await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// Tạo trên DB đích các kiểu dữ liệu do người dùng định nghĩa thuộc schema dbo (alias type và table type) mà DB đích chưa có.
+        /// Kiểu đã có trên DB đích thì giữ nguyên, không drop vì SQL Server chặn drop kiểu đang được object khác dùng.
+        /// </summary>
+        private async Task EnsureUserDefinedTypesAsync(string serverStr, SqlConnection locConn)
+        {
+            var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            using (var existCmd = new SqlCommand("select name from sys.types where is_user_defined = 1 and schema_id = schema_id('dbo')", locConn))
+            using (var existReader = await existCmd.ExecuteReaderAsync())
+            {
+                while (await existReader.ReadAsync()) existing.Add(existReader.GetString(0));
+            }
+
+            // Alias type tạo trước vì cột của table type có thể dùng alias type
+            var scripts = new List<string>();
+
+            using var srvConn = new SqlConnection(serverStr);
+            await srvConn.OpenAsync();
+
+            // 1. Alias type (create type ... from <kiểu hệ thống>)
+            const string aliasSql = @"
+                select t.name, type_name(t.system_type_id), t.max_length, t.precision, t.scale, t.is_nullable
+                from sys.types t
+                where t.is_user_defined = 1
+                  and t.is_table_type = 0
+                  and t.schema_id = schema_id('dbo')
+                order by t.name";
+
+            using (var aliasCmd = new SqlCommand(aliasSql, srvConn))
+            using (var aliasReader = await aliasCmd.ExecuteReaderAsync())
+            {
+                while (await aliasReader.ReadAsync())
+                {
+                    string name = aliasReader.GetString(0);
+
+                    if (existing.Contains(name)) continue;
+
+                    string dataType = FormatDataType(aliasReader.GetString(1), aliasReader.GetInt16(2), aliasReader.GetByte(3), aliasReader.GetByte(4));
+                    bool isNullable = aliasReader.IsDBNull(5) || aliasReader.GetBoolean(5);
+                    scripts.Add($"create type [dbo].[{name}] from {dataType} {(isNullable ? "null" : "not null")}");
+                }
+            }
+
+            // 2. Cột của table type: giữ thứ tự tên type theo lần đọc để script ổn định
+            var tableTypeNames = new List<string>();
+            var tableTypeLines = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            const string columnSql = @"
+                select tt.name, c.name, type_name(c.user_type_id), ty.is_user_defined, schema_name(ty.schema_id),
+                       c.max_length, c.precision, c.scale, c.is_nullable, c.collation_name,
+                       convert(varchar(40), ic.seed_value), convert(varchar(40), ic.increment_value),
+                       dc.definition, cc.definition
+                from sys.table_types tt
+                join sys.columns c on c.object_id = tt.type_table_object_id
+                join sys.types ty on ty.user_type_id = c.user_type_id
+                left join sys.identity_columns ic on ic.object_id = c.object_id and ic.column_id = c.column_id
+                left join sys.default_constraints dc on dc.parent_object_id = c.object_id and dc.parent_column_id = c.column_id
+                left join sys.computed_columns cc on cc.object_id = c.object_id and cc.column_id = c.column_id
+                where tt.schema_id = schema_id('dbo')
+                order by tt.name, c.column_id";
+
+            using (var colCmd = new SqlCommand(columnSql, srvConn))
+            using (var colReader = await colCmd.ExecuteReaderAsync())
+            {
+                while (await colReader.ReadAsync())
+                {
+                    string typeName = colReader.GetString(0);
+
+                    if (existing.Contains(typeName)) continue;
+
+                    if (!tableTypeLines.ContainsKey(typeName))
+                    {
+                        tableTypeNames.Add(typeName);
+                        tableTypeLines[typeName] = new List<string>();
+                    }
+
+                    string colName = colReader.GetString(1);
+                    string? computed = colReader.IsDBNull(13) ? null : colReader.GetString(13);
+
+                    if (computed != null)
+                    {
+                        tableTypeLines[typeName].Add($"[{colName}] as {computed}");
+                        continue;
+                    }
+
+                    bool isUserDefined = colReader.GetBoolean(3);
+                    string colType = isUserDefined ? $"[{colReader.GetString(4)}].[{colReader.GetString(2)}]"
+                                                   : FormatDataType(colReader.GetString(2), colReader.GetInt16(5), colReader.GetByte(6), colReader.GetByte(7));
+                    var line = new StringBuilder($"[{colName}] {colType}");
+
+                    if (!isUserDefined && !colReader.IsDBNull(9)) line.Append($" collate {colReader.GetString(9)}");
+
+                    if (!colReader.IsDBNull(10)) line.Append($" identity({colReader.GetString(10)}, {colReader.GetString(11)})");
+
+                    bool colNullable = colReader.IsDBNull(8) || colReader.GetBoolean(8);
+                    line.Append(colNullable ? " null" : " not null");
+
+                    if (!colReader.IsDBNull(12)) line.Append($" default {colReader.GetString(12)}");
+
+                    tableTypeLines[typeName].Add(line.ToString());
+                }
+            }
+
+            // 3. Primary key / unique của table type (table type không cho đặt tên constraint nên để SQL Server tự sinh)
+            const string keySql = @"
+                select tt.name, i.index_id, i.is_primary_key, i.type, c.name, ic.is_descending_key
+                from sys.table_types tt
+                join sys.indexes i on i.object_id = tt.type_table_object_id
+                join sys.index_columns ic on ic.object_id = i.object_id and ic.index_id = i.index_id
+                join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id
+                where tt.schema_id = schema_id('dbo')
+                  and (i.is_primary_key = 1 or i.is_unique_constraint = 1)
+                order by tt.name, i.index_id, ic.key_ordinal";
+            var keys = new Dictionary<(string TypeName, int IndexId), (bool IsPk, bool IsClustered, List<string> Columns)>();
+
+            using (var keyCmd = new SqlCommand(keySql, srvConn))
+            using (var keyReader = await keyCmd.ExecuteReaderAsync())
+            {
+                while (await keyReader.ReadAsync())
+                {
+                    string typeName = keyReader.GetString(0);
+
+                    if (!tableTypeLines.ContainsKey(typeName)) continue;
+
+                    var keyId = (typeName, keyReader.GetInt32(1));
+
+                    if (!keys.ContainsKey(keyId)) keys[keyId] = (keyReader.GetBoolean(2), keyReader.GetByte(3) == 1, new List<string>());
+
+                    string direction = keyReader.GetBoolean(5) ? "desc" : "asc";
+                    keys[keyId].Columns.Add($"[{keyReader.GetString(4)}] {direction}");
+                }
+            }
+
+            foreach (var (keyId, key) in keys)
+            {
+                string kind = key.IsPk ? "primary key" : "unique";
+                string clustered = key.IsClustered ? "clustered" : "nonclustered";
+                tableTypeLines[keyId.TypeName].Add($"{kind} {clustered} ({string.Join(", ", key.Columns)})");
+            }
+
+            // 4. Check constraint của table type
+            const string checkSql = @"
+                select tt.name, ck.definition
+                from sys.table_types tt
+                join sys.check_constraints ck on ck.parent_object_id = tt.type_table_object_id
+                where tt.schema_id = schema_id('dbo')";
+
+            using (var ckCmd = new SqlCommand(checkSql, srvConn))
+            using (var ckReader = await ckCmd.ExecuteReaderAsync())
+            {
+                while (await ckReader.ReadAsync())
+                {
+                    string typeName = ckReader.GetString(0);
+
+                    if (tableTypeLines.ContainsKey(typeName)) tableTypeLines[typeName].Add($"check {ckReader.GetString(1)}");
+                }
+            }
+
+            foreach (var typeName in tableTypeNames)
+                scripts.Add($"create type [dbo].[{typeName}] as table ({string.Join(", ", tableTypeLines[typeName])})");
+
+            // Tạo lỗi type nào thì bỏ qua type đó, procedure/function dùng type đó sẽ tự báo lỗi ở bước clone object
+            foreach (var script in scripts)
+            {
+                try { await ExecuteNonQuery(locConn, script); }
+                catch { }
+            }
+        }
+
+        /// <summary>Trả về các tên trong danh sách đang được một object thuộc schema dbo trên DB đích sử dụng.</summary>
+        private async Task<HashSet<string>> GetExistingObjectNamesAsync(SqlConnection conn, List<string> names)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (names.Count == 0) return result;
+
+            var paramNames = names.Select((_, i) => $"@n{i}").ToList();
+            string sql = $"select name from sys.objects where schema_id = schema_id('dbo') and name in ({string.Join(", ", paramNames)})";
+            using var cmd = new SqlCommand(sql, conn);
+
+            for (int i = 0; i < names.Count; i++) cmd.Parameters.AddWithValue(paramNames[i], names[i]);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync()) result.Add(reader.GetString(0));
+
+            return result;
+        }
+
+        /// <summary>Ghép tên kiểu hệ thống kèm độ dài / precision / scale theo đúng cú pháp T-SQL.</summary>
+        private static string FormatDataType(string typeName, short maxLength, byte precision, byte scale)
+        {
+            return typeName.ToLowerInvariant() switch
+            {
+                "varchar" or "char" or "varbinary" or "binary" => maxLength == -1 ? $"{typeName}(max)" : $"{typeName}({maxLength})",
+                "nvarchar" or "nchar" => maxLength == -1 ? $"{typeName}(max)" : $"{typeName}({maxLength / 2})",
+                "decimal" or "numeric" => $"{typeName}({precision}, {scale})",
+                "datetime2" or "time" or "datetimeoffset" => $"{typeName}({scale})",
+                "float" => precision == 53 ? typeName : $"{typeName}({precision})",
+                _ => typeName
+            };
         }
     }
 }

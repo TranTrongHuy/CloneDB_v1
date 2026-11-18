@@ -59,18 +59,32 @@
                                    class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40"
                                    placeholder="Database Name" />
                         </div>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="text-[10px] text-gray-500 ml-1 mb-1 block">USER</label>
-                                <input @bind="srv.User" disabled="@isBusy"
-                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
-                            </div>
-                            <div>
-                                <label class="text-[10px] text-gray-500 ml-1 mb-1 block">PASSWORD</label>
-                                <input @bind="srv.Pass" type="password" disabled="@isBusy"
-                                       class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
-                            </div>
+                        <!-- Chọn kiểu đăng nhập cho Source: Windows Auth hoặc SQL Auth -->
+                        <div class="flex items-center gap-1 p-1 bg-[#0B1220] rounded-xl border border-gray-800">
+                            <button @onclick="() => srvUseWinAuth = true" disabled="@isBusy"
+                                    class="flex-1 py-2 rounded-lg text-[10px] font-bold transition-all @(srvUseWinAuth ? "bg-[#0E857D] text-white" : "text-gray-500 hover:text-gray-300")">
+                                WINDOWS AUTH
+                            </button>
+                            <button @onclick="() => srvUseWinAuth = false" disabled="@isBusy"
+                                    class="flex-1 py-2 rounded-lg text-[10px] font-bold transition-all @(!srvUseWinAuth ? "bg-[#0E857D] text-white" : "text-gray-500 hover:text-gray-300")">
+                                SQL AUTH
+                            </button>
                         </div>
+                        @if (!srvUseWinAuth)
+                        {
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-[10px] text-gray-500 ml-1 mb-1 block">USER</label>
+                                    <input @bind="srv.User" disabled="@isBusy"
+                                           class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-500 ml-1 mb-1 block">PASSWORD</label>
+                                    <input @bind="srv.Pass" type="password" disabled="@isBusy"
+                                           class="w-full bg-[#0B1220] border border-gray-700/50 p-3 rounded-xl focus:border-[#0E857D] transition-all outline-none text-sm disabled:opacity-40" />
+                                </div>
+                            </div>
+                        }
                     </div>
                 </div>
 
@@ -598,6 +612,8 @@
 
     Config srv = new();
     Config loc = new() { Host = "." };
+    // Source mặc định dùng SQL Auth vì thường là server remote
+    bool srvUseWinAuth = false;
     bool useWinAuth = true;
     AppState state = AppState.Idle;
     string connectError = "";
@@ -719,10 +735,15 @@
 
     async Task Connect()
     {
-        if (string.IsNullOrWhiteSpace(srv.Host) || string.IsNullOrWhiteSpace(srv.DB) ||
-            string.IsNullOrWhiteSpace(srv.User) || string.IsNullOrWhiteSpace(srv.Pass))
+        if (string.IsNullOrWhiteSpace(srv.Host) || string.IsNullOrWhiteSpace(srv.DB))
         {
-            connectError = "Vui lòng điền đầy đủ thông tin Source Server."; return;
+            connectError = "Vui lòng điền đầy đủ thông tin Source Server (Host + Database)."; return;
+        }
+
+        // Chỉ bắt buộc User/Pass của Source khi dùng SQL Auth
+        if (!srvUseWinAuth && (string.IsNullOrWhiteSpace(srv.User) || string.IsNullOrWhiteSpace(srv.Pass)))
+        {
+            connectError = "Nhập User/Pass cho Source SQL Auth."; return;
         }
         if (string.IsNullOrWhiteSpace(loc.Host) || string.IsNullOrWhiteSpace(loc.DB))
         {
@@ -889,8 +910,9 @@
 
     // ── Connection strings ───────────────────────────────────────────────────
 
-    string BuildServerConnStr =>
-        $"Server={srv.Host};Database={srv.DB};User ID={srv.User};Password={srv.Pass};TrustServerCertificate=True;";
+    // Source dùng Integrated Security khi chọn Windows Auth, ngược lại dùng User/Pass
+    string BuildServerConnStr => srvUseWinAuth ? $"Server={srv.Host};Database={srv.DB};Integrated Security=True;TrustServerCertificate=True;"
+                                               : $"Server={srv.Host};Database={srv.DB};User ID={srv.User};Password={srv.Pass};TrustServerCertificate=True;";
     string BuildLocalConnStr => useWinAuth
         ? $"Server={loc.Host};Database={loc.DB};Integrated Security=True;TrustServerCertificate=True;"
         : $"Server={loc.Host};Database={loc.DB};User ID={loc.User};Password={loc.Pass};TrustServerCertificate=True;";
